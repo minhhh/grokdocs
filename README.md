@@ -16,8 +16,12 @@
 
 ## CLI Interface
 - `grokdocs init`: Generate a default configuration file (`grokdocs.yml`).
-- `grokdocs index [path]`: Scan the directory, chunk documents, generate embeddings, and update the FAISS index.
-- `grokdocs search "how does the auth system work?"`: Perform a semantic search and return beautifully formatted results in the terminal, including the file path, line numbers, and a preview of the chunk.
+- `grokdocs sync`: Scan directories and synchronize files with the database.
+  - `--all`: Sync all configured collections.
+  - `--collection <name>`: Sync only the specified collection.
+- `grokdocs search "<query>"`: Perform a hybrid search and return formatted results (file path, lines, text preview).
+  - `--collection <name>`: Limit search query to the specified collection.
+- `grokdocs mcp`: Start the Model Context Protocol (MCP) server for LLM integration.
 
 ### 3. LLM Integration
 - **Model Context Protocol (MCP)**: Run an MCP server so your LLMs (like Claude Desktop) can autonomously search your documentation.
