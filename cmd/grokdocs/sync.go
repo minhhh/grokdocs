@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/minhhh/grokdocs/internal/ingest"
+	"github.com/minhhh/grokdocs/internal/project"
 	"github.com/spf13/cobra"
 )
 
@@ -24,13 +26,40 @@ var syncCmd = &cobra.Command{
 		}
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		if syncAll {
-			fmt.Printf("grokdocs sync called with --all (projectPath: '%s'): synchronizing all collections...\n", projectPath)
-		} else if syncCollection != "" {
-			fmt.Printf("grokdocs sync called for collection '%s' (projectPath: '%s'): synchronizing...\n", syncCollection, projectPath)
-		} else {
-			fmt.Printf("grokdocs sync called with no flags (projectPath: '%s'): synchronizing the 'default' collection...\n", projectPath)
+		startDir := projectPath
+		if startDir == "" {
+			startDir = DefaultStartDir
 		}
+		proj, err := project.FindProject(startDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := proj.Load(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading project: %v. Please run 'grokdocs init' first.\n", err)
+			os.Exit(1)
+		}
+		defer proj.Close()
+
+		var targets []string
+		if syncAll {
+			for name := range proj.Config.Collections {
+				targets = append(targets, name)
+			}
+		} else if syncCollection != "" {
+			targets = []string{syncCollection}
+		} else {
+			targets = []string{"default"}
+		}
+
+		for _, coll := range targets {
+			fmt.Printf("Synchronizing collection %q...\n", coll)
+			if err := ingest.SyncCollection(proj, coll); err != nil {
+				fmt.Fprintf(os.Stderr, "Error synchronizing collection %q: %v\n", coll, err)
+				os.Exit(1)
+			}
+		}
+		fmt.Println("Sync completed successfully.")
 	},
 }
 

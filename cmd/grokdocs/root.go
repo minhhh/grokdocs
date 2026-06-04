@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const DefaultStartDir = "."
+
 var projectPath string
 
 var rootCmd = &cobra.Command{

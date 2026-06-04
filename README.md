@@ -23,7 +23,7 @@
 ### Building from Source
 Clone the repository and build the binary:
 ```bash
-go build ./cmd/grokdocs
+go build -tags fts5 ./cmd/grokdocs
 ```
 This produces a `grokdocs` executable in the root directory.
 
@@ -33,8 +33,40 @@ To view all available commands and flags, run:
 ./grokdocs --help
 ```
 
+## Project Structure & Workspace Configuration
+
+`grokdocs` organizes index data and configuration inside a `.grokdocs` folder located at the root of your project:
+
+```
+my-project/
+├── .grokdocs/
+│   ├── config.yaml      # Project configuration
+│   ├── grokdocs.db      # FTS database (SQLite schema and FTS5 keyword index)
+│   └── grokdocs.index   # Vector database (FAISS index file for semantic search)
+├── docs/
+│   └── readme.md
+└── src/
+    └── main.go
+```
+
+### Configuration File (`config.yaml`)
+A default `config.yaml` is generated inside `.grokdocs/` upon calling `grokdocs init`:
+```yaml
+collections:
+  default:
+    path: "."
+    parsers:
+      - markdown
+```
+
+### Root Directory Lookup Algorithm
+All CLI commands support a global `-p, --project <path>` flag to specify the workspace root. If the flag is omitted:
+1. `grokdocs` starts searching at the current working directory (`.`).
+2. It walks up the parent directories recursively looking for a `.grokdocs` folder.
+3. If no `.grokdocs` directory is found up to the filesystem root, it falls back to the current directory (`.`) as the project root.
+
 ## CLI Interface
-All commands support a global `-p, --project <path>` flag. If `-p` is omitted, the CLI searches up the directory hierarchy starting from the current directory to find a `.grokdocs` folder (defaulting to `./` if none is found).
+All commands support the global `-p, --project <path>` flag. If `-p` is omitted, the CLI uses the lookup algorithm above to discover the project workspace.
 
 - `grokdocs init`: Initialize the workspace and generate a default configuration file (`config.yaml`) inside the `.grokdocs` directory.
 - `grokdocs sync`: Scan directories and synchronize files into the SQLite database and FAISS index.
