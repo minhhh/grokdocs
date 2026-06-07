@@ -24,6 +24,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 - **PRD-010**: Add Util Package and Slog Logger Wrapper.
 - **PRD-011**: Implement status and status root CLI commands.
 - **PRD-012**: Move Util to Internal and Expose Logger Variable.
+- **PRD-013**: Refactor InitLogger Parameter to slog.Level.
 
 ---
 
@@ -31,7 +32,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Current tracker.*
 
-- [x] **PRD-012**: Move Util to Internal and Expose Logger Variable
+- [x] **PRD-013**: Refactor InitLogger Parameter to slog.Level
 
 ---
 
@@ -39,24 +40,19 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Only contains details/checklists for active tasks in Section 2.*
 
-### PRD-012: Move Util to Internal and Expose Logger Variable
+### PRD-013: Refactor InitLogger Parameter to slog.Level
 
-- **Objective**: Refactor the codebase to move the utility package from `pkg/util` to `internal/util`. Change the structured logging design to use a global package-level `util.Logger` variable. Additionally, refactor `LogFormat` using the opaque struct pattern to prevent callers from passing arbitrary values.
+- **Objective**: Refactor `InitLogger` in `internal/util/logger.go` to accept the `slog.Level` parameter directly instead of a string to improve type safety and simplify string parsing.
 
 - **Checklist**:
-  - [x] Move files in `pkg/util/` to `internal/util/`.
-  - [x] Refactor `LogFormat` to use the compile-time type-safe opaque struct pattern (struct with unexported private field).
-  - [x] Expose a global package-level logger variable `var Logger *slog.Logger` in package `util`.
-  - [x] Initialize `Logger` with a default/fallback logger (e.g. text format, info level to stderr) so that imports don't panic before `InitLogger` is called.
-  - [x] Refactor `InitLogger` to configure the global `Logger` variable instead of a hidden package global.
-  - [x] Update all import paths referencing `github.com/minhhh/grokdocs/pkg/util` to `github.com/minhhh/grokdocs/internal/util`.
-  - [x] Update all logging calls in the codebase (`cmd/grokdocs`, `internal/ingest`, `internal/project`, etc.) from package functions like `util.Info` or `util.Debug` to `util.Logger.Info` and `util.Logger.Debug`.
-  - [x] Update all tests referencing `pkg/util` to reference `internal/util`, ensuring they pass successfully.
+  - [x] Modify `InitLogger` signature in `internal/util/logger.go` to accept `slog.Level` instead of `string`.
+  - [x] Remove the internal string-to-level parsing logic from `InitLogger`.
+  - [x] Update call sites of `InitLogger` in `cmd/grokdocs/root.go` to map string input to `slog.Level` before calling it.
+  - [x] Update `logger_test.go` to call `InitLogger` with `slog.Level` directly.
 
 - **Validation**:
   - [x] Verify that the codebase compiles cleanly.
-  - [x] Run `go test -tags fts5 ./...` to ensure all tests pass.
-  - [x] Verify that running CLI commands produces structured log outputs as expected.
+  - [x] Run all tests using `go test -tags fts5 ./...` and ensure they pass.
 
 ---
 
@@ -64,10 +60,10 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Placeholders for future tasks.*
 
-- [ ] **PRD-013**: Integrate local ONNX models to convert chunks to vectors on-device
-- [ ] **PRD-014**: Integrate FAISS via `go-faiss` to store vectors and perform similarity searches
+- [ ] **PRD-014**: Integrate local ONNX models to convert chunks to vectors on-device
+- [ ] **PRD-015**: Integrate FAISS via `go-faiss` to store vectors and perform similarity searches
 
-### PRD-013: Integrate local ONNX models to convert chunks to vectors on-device
+### PRD-014: Integrate local ONNX models to convert chunks to vectors on-device
 
 - **Objective**: Use a local ONNX model (such as `all-MiniLM-L6-v2` or `bge-small-en-v1.5`) to generate vector embeddings for text chunks. The application should dynamically download the model and tokenizer files on first run if they are not cached.
 
@@ -84,7 +80,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
     - The downloader successfully retrieves the model and tokenizer files.
     - Loading the model and embedding a test text sentence returns a valid floating-point slice of expected dimension (e.g., 384 float values for MiniLM).
 
-### PRD-014: Integrate FAISS via go-faiss to store vectors and perform similarity searches
+### PRD-015: Integrate FAISS via go-faiss to store vectors and perform similarity searches
 
 - **Objective**: Embed FAISS index storage and similarity search capability using the `go-faiss` bindings inside the `VectorDatabase` wrapper.
 
@@ -113,6 +109,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 - [x] **PRD-009**: Decoupled & Flexible File Parsing with Chunkx Support
 - [x] **PRD-010**: Add Util Package and Slog Logger Wrapper
 - [x] **PRD-011**: Implement status and status root CLI commands
+- [x] **PRD-012**: Move Util to Internal and Expose Logger Variable
 
 ### PRD-001: Scaffold Go Project Structure
 
@@ -297,4 +294,23 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 - **Validation**:
   - [x] Verify invoking `./grokdocs status root` prints the correct absolute path of the local `.grokdocs` folder.
   - [x] Verify invoking `./grokdocs status` prints exact counts matching the SQLite FTS database contents (e.g. comparing chunks, document counts).
+
+### PRD-012: Move Util to Internal and Expose Logger Variable
+
+- **Objective**: Refactor the codebase to move the utility package from `pkg/util` to `internal/util`. Change the structured logging design to use a global package-level `util.Logger` variable. Additionally, refactor `LogFormat` using the opaque struct pattern to prevent callers from passing arbitrary values.
+
+- **Checklist**:
+  - [x] Move files in `pkg/util/` to `internal/util/`.
+  - [x] Refactor `LogFormat` to use the compile-time type-safe opaque struct pattern (struct with unexported private field).
+  - [x] Expose a global package-level logger variable `var Logger *slog.Logger` in package `util`.
+  - [x] Initialize `Logger` with a default/fallback logger (e.g. text format, info level to stderr) so that imports don't panic before `InitLogger` is called.
+  - [x] Refactor `InitLogger` to configure the global `Logger` variable instead of a hidden package global.
+  - [x] Update all import paths referencing `github.com/minhhh/grokdocs/pkg/util` to `github.com/minhhh/grokdocs/internal/util`.
+  - [x] Update all logging calls in the codebase (`cmd/grokdocs`, `internal/ingest`, `internal/project`, etc.) from package functions like `util.Info` or `util.Debug` to `util.Logger.Info` and `util.Logger.Debug`.
+  - [x] Update all tests referencing `pkg/util` to reference `internal/util`, ensuring they pass successfully.
+
+- **Validation**:
+  - [x] Verify that the codebase compiles cleanly.
+  - [x] Run `go test -tags fts5 ./...` to ensure all tests pass.
+  - [x] Verify that running CLI commands produces structured log outputs as expected.
 

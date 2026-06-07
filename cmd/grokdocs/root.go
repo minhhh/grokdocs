@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -28,7 +29,20 @@ var rootCmd = &cobra.Command{
 		} else {
 			fmtVal = util.FormatText
 		}
-		util.InitLogger(os.Stderr, logLevel, fmtVal)
+
+		var lvl slog.Level
+		switch strings.ToLower(logLevel) {
+		case "debug":
+			lvl = slog.LevelDebug
+		case "warn":
+			lvl = slog.LevelWarn
+		case "error":
+			lvl = slog.LevelError
+		default:
+			lvl = slog.LevelInfo
+		}
+
+		util.InitLogger(os.Stderr, lvl, fmtVal)
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.Help()

@@ -2,13 +2,14 @@ package util
 
 import (
 	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 )
 
 func TestLoggerTextFormat(t *testing.T) {
 	var buf bytes.Buffer
-	InitLogger(&buf, "info", FormatText)
+	InitLogger(&buf, slog.LevelInfo, FormatText)
 
 	Logger.Info("hello test message", "key", "val")
 
@@ -26,7 +27,7 @@ func TestLoggerTextFormat(t *testing.T) {
 
 func TestLoggerJSONFormat(t *testing.T) {
 	var buf bytes.Buffer
-	InitLogger(&buf, "debug", FormatJSON)
+	InitLogger(&buf, slog.LevelDebug, FormatJSON)
 
 	Logger.Debug("debug json message", "number", 42)
 
@@ -44,7 +45,7 @@ func TestLoggerJSONFormat(t *testing.T) {
 
 func TestLoggerLevelsFiltering(t *testing.T) {
 	var buf bytes.Buffer
-	InitLogger(&buf, "warn", FormatText)
+	InitLogger(&buf, slog.LevelWarn, FormatText)
 
 	Logger.Debug("this should not show up")
 	Logger.Info("neither should this")

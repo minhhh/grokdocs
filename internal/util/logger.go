@@ -4,7 +4,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"strings"
 )
 
 // LogFormat defines the format of the logger output (JSON or Text).
@@ -22,21 +21,9 @@ var (
 var Logger *slog.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 // InitLogger initializes the global structured logger with the specified writer, level, and format.
-func InitLogger(w io.Writer, level string, format LogFormat) {
-	var slogLevel slog.Level
-	switch strings.ToLower(level) {
-	case "debug":
-		slogLevel = slog.LevelDebug
-	case "warn":
-		slogLevel = slog.LevelWarn
-	case "error":
-		slogLevel = slog.LevelError
-	default:
-		slogLevel = slog.LevelInfo
-	}
-
+func InitLogger(w io.Writer, level slog.Level, format LogFormat) {
 	opts := &slog.HandlerOptions{
-		Level: slogLevel,
+		Level: level,
 	}
 
 	var handler slog.Handler
