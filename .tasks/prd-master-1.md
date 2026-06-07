@@ -8,7 +8,7 @@
 
 ### Feature Overview
 
-grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search. Phase 1 focuses on setting up the codebase structure, benchmarking harness, Cobra CLI commands, configuration management, SQLite metadata/chunk database, file ingestion/chunking, and decoupled, custom parsing. All semantic vector search, local ONNX embedding generation, and FAISS indexing features are deferred to the Future Roadmap & Backlog.
+grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search. Phase 1 focuses on setting up the codebase structure, benchmarking harness, Cobra CLI commands, configuration management, SQLite metadata/chunk database, file ingestion/chunking, decoupled/custom parsing, structured logging utility, and diagnostic status reporting. All semantic vector search, local ONNX embedding generation, and FAISS indexing features are deferred to the Future Roadmap & Backlog.
 
 ### User Stories / Requirements
 
@@ -21,6 +21,9 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 - **PRD-007**: Integrate and implement the end-to-end `sync` command pipeline (FTS only).
 - **PRD-008**: Integrate and implement the end-to-end `search` command pipeline (FTS only).
 - **PRD-009**: Decoupled & Flexible File Parsing with Chunkx Support.
+- **PRD-010**: Add Util Package and Slog Logger Wrapper.
+- **PRD-011**: Implement status and status root CLI commands.
+- **PRD-012**: Move Util to Internal and Expose Logger Variable.
 
 ---
 
@@ -28,7 +31,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Current tracker.*
 
-- [ ] **PRD-009**: Decoupled & Flexible File Parsing with Chunkx Support
+- [x] **PRD-012**: Move Util to Internal and Expose Logger Variable
 
 ---
 
@@ -36,21 +39,24 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Only contains details/checklists for active tasks in Section 2.*
 
-### PRD-009: Decoupled & Flexible File Parsing with Chunkx Support
+### PRD-012: Move Util to Internal and Expose Logger Variable
 
-- **Objective**: Implement a flexible document-parsing architecture in `grokdocs` to extract structured data from various file types. This system decouples file routing (by extensions, complex extensions, and specific filenames) from parser capabilities, and wraps `chunkx` inside a generic parser that dynamically supports all chunkx-supported programming languages and text formats.
+- **Objective**: Refactor the codebase to move the utility package from `pkg/util` to `internal/util`. Change the structured logging design to use a global package-level `util.Logger` variable. Additionally, refactor `LogFormat` using the opaque struct pattern to prevent callers from passing arbitrary values.
 
 - **Checklist**:
-  - [ ] Define the generic `Parser` interface and registry in `internal/ingest` to separate parsing logic from file-pattern mapping.
-  - [ ] Update configuration models in `internal/config` to support an ordered list of `ParserMatcher` rules (filename, complex extension, and extension).
-  - [ ] Support global `default_parsers` at the root of `config.yaml` and collection-level parser overrides.
-  - [ ] Implement a general-purpose `ChunkxParser` that wraps `chunkx` AST chunker and maps extension/language types to their corresponding `chunkx.WithLanguage()` options.
-  - [ ] Implement parser resolution routing logic (collection rules first, falling back to global defaults) and integrate it with `SyncCollection` in `internal/ingest`.
-  - [ ] Write unit tests to verify matching precedence, chunkx parser routing, and fallback behavior.
+  - [x] Move files in `pkg/util/` to `internal/util/`.
+  - [x] Refactor `LogFormat` to use the compile-time type-safe opaque struct pattern (struct with unexported private field).
+  - [x] Expose a global package-level logger variable `var Logger *slog.Logger` in package `util`.
+  - [x] Initialize `Logger` with a default/fallback logger (e.g. text format, info level to stderr) so that imports don't panic before `InitLogger` is called.
+  - [x] Refactor `InitLogger` to configure the global `Logger` variable instead of a hidden package global.
+  - [x] Update all import paths referencing `github.com/minhhh/grokdocs/pkg/util` to `github.com/minhhh/grokdocs/internal/util`.
+  - [x] Update all logging calls in the codebase (`cmd/grokdocs`, `internal/ingest`, `internal/project`, etc.) from package functions like `util.Info` or `util.Debug` to `util.Logger.Info` and `util.Logger.Debug`.
+  - [x] Update all tests referencing `pkg/util` to reference `internal/util`, ensuring they pass successfully.
 
 - **Validation**:
-  - Add unit tests verifying `matchesRule` for files, complex extensions, and simple extensions.
-  - Add tests verifying parser override resolution and the generic chunkx parser on different files.
+  - [x] Verify that the codebase compiles cleanly.
+  - [x] Run `go test -tags fts5 ./...` to ensure all tests pass.
+  - [x] Verify that running CLI commands produces structured log outputs as expected.
 
 ---
 
@@ -58,10 +64,10 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Placeholders for future tasks.*
 
-- [ ] **PRD-010**: Integrate local ONNX models to convert chunks to vectors on-device
-- [ ] **PRD-011**: Integrate FAISS via `go-faiss` to store vectors and perform similarity searches
+- [ ] **PRD-013**: Integrate local ONNX models to convert chunks to vectors on-device
+- [ ] **PRD-014**: Integrate FAISS via `go-faiss` to store vectors and perform similarity searches
 
-### PRD-010: Integrate local ONNX models to convert chunks to vectors on-device
+### PRD-013: Integrate local ONNX models to convert chunks to vectors on-device
 
 - **Objective**: Use a local ONNX model (such as `all-MiniLM-L6-v2` or `bge-small-en-v1.5`) to generate vector embeddings for text chunks. The application should dynamically download the model and tokenizer files on first run if they are not cached.
 
@@ -78,7 +84,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
     - The downloader successfully retrieves the model and tokenizer files.
     - Loading the model and embedding a test text sentence returns a valid floating-point slice of expected dimension (e.g., 384 float values for MiniLM).
 
-### PRD-011: Integrate FAISS via go-faiss to store vectors and perform similarity searches
+### PRD-014: Integrate FAISS via go-faiss to store vectors and perform similarity searches
 
 - **Objective**: Embed FAISS index storage and similarity search capability using the `go-faiss` bindings inside the `VectorDatabase` wrapper.
 
@@ -104,6 +110,9 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 - [x] **PRD-006**: Integrate file walking and `gomantics/chunkx` for processing and chunking supported files, and implement FTS search and sync
 - [x] **PRD-007**: Integrate and implement the end-to-end `sync` command pipeline (FTS only)
 - [x] **PRD-008**: Integrate and implement the end-to-end `search` command pipeline (FTS only)
+- [x] **PRD-009**: Decoupled & Flexible File Parsing with Chunkx Support
+- [x] **PRD-010**: Add Util Package and Slog Logger Wrapper
+- [x] **PRD-011**: Implement status and status root CLI commands
 
 ### PRD-001: Scaffold Go Project Structure
 
@@ -235,3 +244,57 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 - **Validation**:
   - Run search CLI command: verify keyword matches are printed with correct line ranges and snippet outputs.
+
+### PRD-009: Decoupled & Flexible File Parsing with Chunkx Support
+
+- **Objective**: Implement a flexible document-parsing architecture in `grokdocs` to extract structured data from various file types. This system maps file patterns (filenames, complex extensions, and simple extensions) to specific parsers, resolving matches using a built-in priority algorithm where specific filenames have the highest priority.
+
+- **Checklist**:
+  - [x] Define the generic `Parser` interface and registry in `internal/ingest` to separate parsing logic from file-pattern mapping.
+  - [x] Update configuration models in `internal/config` to support `ParserMap` as a `map[string]string` mapping pattern to parser names.
+  - [x] Support global `default_parsers` map at the root of `config.yaml` and collection-level parser map overrides.
+  - [x] Implement a general-purpose `ChunkxParser` that wraps `chunkx` AST chunker and maps extension/language types to their corresponding `chunkx.WithLanguage()` options.
+  - [x] Implement the priority-based routing algorithm to select the best-matching parser (e.g. Exact File Match > Complex Extension > Simple Extension > Wildcard).
+  - [x] Integrate parser routing with `SyncCollection` in `internal/ingest`.
+  - [x] Write unit tests to verify matching precedence (e.g., ensuring `hello.md` matches `HelloMarkdown` instead of `.md` / `*.md` parser), chunkx parser routing, and fallback behavior.
+
+- **Validation**:
+  - [x] Add unit tests verifying `matchesRule` and priority resolution for exact files, complex extensions, and simple extensions.
+  - [x] Add tests verifying parser override resolution and the generic chunkx parser on different files.
+
+### PRD-010: Add Util Package and Slog Logger Wrapper
+
+- **Objective**: Implement a shared utility package under `pkg/util` providing a structured logging module that wraps Go's standard library `log/slog`. It should support multiple levels (Debug, Info, Warn, Error), custom output format selection (JSON vs. readable Text), and be integrated into the CLI commands and internal packages to unify logging output.
+
+- **Checklist**:
+  - [x] Create package directory `pkg/util`.
+  - [x] Implement `logger.go` wrapping `log/slog` handlers.
+  - [x] Support log level configuration (Debug, Info, Warn, Error).
+  - [x] Support format configuration (JSON for machines, human-readable Text for CLI).
+  - [x] Integrate the logger into CLI command handlers (`cmd/grokdocs`) and internal modules (`internal/ingest` and `internal/project`) to replace raw `fmt.Printf` / `fmt.Fprintf` statements.
+  - [x] Write unit tests verifying logger outputs, custom levels, and format rendering.
+
+- **Validation**:
+  - [x] Add unit tests validating that the logger correctly writes structured attributes, respects configured log levels, and switches formats (JSON vs Text).
+  - [x] Verify that running CLI commands (`sync`, `search`) output logs using the structured format when requested.
+
+### PRD-011: Implement status and status root CLI commands
+
+- **Objective**: Add a diagnostic `status` command and a `status root` subcommand to report the state of the grokdocs workspace, collection metadata, and file indexing stats.
+
+- **Checklist**:
+  - [x] Implement `statusCmd` in `cmd/grokdocs` that displays indexed statistics.
+  - [x] Implement `statusRootCmd` as a subcommand under `status` that prints the resolved absolute path of the `.grokdocs` directory.
+  - [x] Query FTSDatabase to fetch summary statistics:
+    - Count of configured collections.
+    - Total files indexed.
+    - Total documents indexed per collection.
+    - Total chunks in database.
+    - Total characters indexed.
+  - [x] Render the statistics to stdout in a clean, human-readable format.
+  - [x] Verify that running with an invalid workspace root reports the fallback paths correctly.
+
+- **Validation**:
+  - [x] Verify invoking `./grokdocs status root` prints the correct absolute path of the local `.grokdocs` folder.
+  - [x] Verify invoking `./grokdocs status` prints exact counts matching the SQLite FTS database contents (e.g. comparing chunks, document counts).
+

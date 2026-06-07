@@ -49,7 +49,7 @@ func TestFileWalking(t *testing.T) {
 			Collections: map[string]config.CollectionConfig{
 				"default": {
 					Path:    "docs",
-					Parsers: []string{"markdown"},
+					Parsers: map[string]string{".md": "markdown", ".markdown": "markdown"},
 				},
 			},
 		},
@@ -107,10 +107,15 @@ This is the configuration section.
 Here is some config text.
 `
 
-	chunks, err := chunkContent(docContent, "test.md", 100)
-	if err != nil {
-		t.Fatalf("chunkContent failed: %v", err)
+	p, ok := GetParser("markdown")
+	if !ok {
+		t.Fatal("markdown parser not registered")
 	}
+	parsed, err := p.Parse("test.md", docContent, 100)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	chunks := parsed.Chunks
 
 	if len(chunks) == 0 {
 		t.Fatalf("expected some chunks to be generated, got 0")
@@ -197,7 +202,7 @@ We hope you enjoy searching locally and offline.
 			Collections: map[string]config.CollectionConfig{
 				"default": {
 					Path:    "docs",
-					Parsers: []string{"markdown"},
+					Parsers: map[string]string{".md": "markdown", ".markdown": "markdown"},
 				},
 			},
 		},
@@ -280,5 +285,53 @@ We have replaced the word and added remote.
 	}
 	if len(deletedResults) != 0 {
 		t.Errorf("expected 0 matches after document deletion, got %d", len(deletedResults))
+	}
+}
+
+func TestParserResolutionAndPrecedence(t *testing.T) {
+	cfg := &config.Config{
+		DefaultParsers: map[string]string{
+			".md":      "markdown",
+			".rfc.md":  "rfc-parser",
+			"*.js":     "javascript-parser",
+		},
+		Collections: map[string]config.CollectionConfig{
+			"default": {
+				Path: ".",
+				Parsers: map[string]string{
+					"hello.md": "hello-parser",
+				},
+			},
+		},
+	}
+
+	// 1. Specific filename takes highest priority
+	pName, ok := ResolveParserName(cfg, "default", "path/to/hello.md")
+	if !ok || pName != "hello-parser" {
+		t.Errorf("expected hello-parser, got %s (ok=%t)", pName, ok)
+	}
+
+	// 2. Complex extension matches next
+	pName, ok = ResolveParserName(cfg, "default", "path/to/doc.rfc.md")
+	if !ok || pName != "rfc-parser" {
+		t.Errorf("expected rfc-parser, got %s (ok=%t)", pName, ok)
+	}
+
+	// 3. Simple extension matches next
+	pName, ok = ResolveParserName(cfg, "default", "path/to/other.md")
+	if !ok || pName != "markdown" {
+		t.Errorf("expected markdown, got %s (ok=%t)", pName, ok)
+	}
+
+	// 4. Wildcard/glob pattern matches
+	pName, ok = ResolveParserName(cfg, "default", "path/to/script.js")
+	if !ok || pName != "javascript-parser" {
+		t.Errorf("expected javascript-parser, got %s (ok=%t)", pName, ok)
+	}
+
+	// 5. Unmatched file
+	_, ok = ResolveParserName(cfg, "default", "path/to/style.css")
+	if ok {
+		t.Errorf("expected no match for style.css")
 	}
 }

@@ -12,16 +12,14 @@ import (
 
 	"github.com/gomantics/chunkx"
 	"github.com/gomantics/chunkx/languages"
+	"github.com/minhhh/grokdocs/internal/config"
 	"github.com/minhhh/grokdocs/internal/project"
+	"github.com/minhhh/grokdocs/internal/util"
 )
 
 const (
 	DefaultChunkMaxSize = 500
 )
-
-var parserExtensions = map[string][]string{
-	"markdown": {".md", ".markdown"},
-}
 
 // SectionHeader represents a parsed Markdown section header.
 type SectionHeader struct {
@@ -29,12 +27,232 @@ type SectionHeader struct {
 	LineNumber int
 }
 
-// SyncCollection scans files and syncs them to the SQLite FTS database.
+// ParsedDocument contains document slug, metadata JSON string, and chunks.
+type ParsedDocument struct {
+	Slug     string
+	Metadata string // JSON-encoded string
+	Chunks   []*project.ChunkRecord
+}
+
+// Parser defines the behavior for a parser implementation.
+type Parser interface {
+	Parse(relPath string, content string, fileSize int64) (*ParsedDocument, error)
+}
+
+// Global registry of parsers
+var parserRegistry = make(map[string]Parser)
+
+func RegisterParser(name string, p Parser) {
+	parserRegistry[name] = p
+}
+
+func GetParser(name string) (Parser, bool) {
+	p, ok := parserRegistry[name]
+	return p, ok
+}
+
+// ChunkxParser wraps the gomantics/chunkx AST-based library.
+type ChunkxParser struct {
+	DefaultLanguage languages.LanguageName
+}
+
+func (cp *ChunkxParser) Parse(relPath string, content string, fileSize int64) (*ParsedDocument, error) {
+	var lang languages.LanguageName
+	if config, ok := languages.DetectLanguage(relPath); ok {
+		lang = config.Name
+	} else {
+		lang = cp.DefaultLanguage
+	}
+
+	chunker := chunkx.NewChunker()
+	var cxChunks []chunkx.Chunk
+	var err error
+
+	if lang != "" {
+		cxChunks, err = chunker.Chunk(
+			content,
+			chunkx.WithLanguage(lang),
+			chunkx.WithMaxSize(DefaultChunkMaxSize),
+		)
+	} else {
+		cxChunks, err = chunker.Chunk(
+			content,
+			chunkx.WithMaxSize(DefaultChunkMaxSize),
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	headers := parseHeaders(content)
+
+	var chunks []*project.ChunkRecord
+	for i, cx := range cxChunks {
+		sectionTitle := ""
+		sectionNum := 0
+		for idx, h := range headers {
+			if h.LineNumber <= cx.StartLine {
+				sectionTitle = h.Title
+				sectionNum = idx + 1
+			}
+		}
+
+		sum := sha256.Sum256([]byte(cx.Content))
+		chunkHash := fmt.Sprintf("%x", sum)
+
+		metaMap := map[string]any{
+			"filename":      filepath.Base(relPath),
+			"section_num":   sectionNum,
+			"section_title": sectionTitle,
+		}
+		metaBytes, _ := json.Marshal(metaMap)
+
+		chunks = append(chunks, &project.ChunkRecord{
+			ChunkIndex:   i,
+			TextContent:  cx.Content,
+			ContentHash:  chunkHash,
+			TotalChars:   int64(len(cx.Content)),
+			LineStart:    cx.StartLine,
+			LineEnd:      cx.EndLine,
+			SectionNum:   sectionNum,
+			SectionTitle: sectionTitle,
+			Metadata:     string(metaBytes),
+		})
+	}
+
+	docMetadata := map[string]any{
+		"path": relPath,
+		"size": fileSize,
+	}
+	docMetaBytes, _ := json.Marshal(docMetadata)
+
+	return &ParsedDocument{
+		Slug:     strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath)),
+		Metadata: string(docMetaBytes),
+		Chunks:   chunks,
+	}, nil
+}
+
+func init() {
+	RegisterParser("markdown", &ChunkxParser{DefaultLanguage: languages.Markdown})
+	RegisterParser("chunkx", &ChunkxParser{})
+}
+
+// Match priority ranking
+type MatchPriority int
+
+const (
+	PriorityNone MatchPriority = iota
+	PriorityWildcard
+	PriorityExtension
+	PriorityComplexExtension
+	PriorityExactFile
+)
+
+func getMatchPriority(pattern string) MatchPriority {
+	// Exact filename matches (no wildcards, doesn't start with dot)
+	if !strings.HasPrefix(pattern, ".") && !strings.ContainsAny(pattern, "*?[]") {
+		return PriorityExactFile
+	}
+	// Complex extension (starts with dot, contains multiple dots like .rfc.md)
+	if strings.HasPrefix(pattern, ".") && strings.Count(pattern, ".") > 1 {
+		return PriorityComplexExtension
+	}
+	// Simple extension (starts with dot, one dot like .md)
+	if strings.HasPrefix(pattern, ".") && strings.Count(pattern, ".") == 1 {
+		return PriorityExtension
+	}
+	// General wildcard/glob pattern (contains *, ?, etc. like *.md or **/test.md)
+	return PriorityWildcard
+}
+
+func matchesPattern(path string, pattern string) bool {
+	base := filepath.Base(path)
+	patternLower := strings.ToLower(pattern)
+	pathLower := strings.ToLower(path)
+	baseLower := strings.ToLower(base)
+
+	// 1. Extension or complex extension match (starts with a dot)
+	if strings.HasPrefix(patternLower, ".") {
+		return strings.HasSuffix(pathLower, patternLower)
+	}
+
+	// 2. Wildcard/Glob match
+	if strings.ContainsAny(patternLower, "*?[]") {
+		matched, err := filepath.Match(patternLower, baseLower)
+		return err == nil && matched
+	}
+
+	// 3. Exact filename match
+	return baseLower == patternLower
+}
+
+func ResolveParserName(cfg *config.Config, collectionName string, path string) (string, bool) {
+	if cfg == nil {
+		return "", false
+	}
+	collCfg, ok := cfg.Collections[collectionName]
+	if !ok {
+		return "", false
+	}
+
+	type matchCandidate struct {
+		pattern    string
+		parserName string
+		priority   MatchPriority
+	}
+
+	var candidates []matchCandidate
+
+	// Check collection-level overrides
+	for pattern, parserName := range collCfg.Parsers {
+		if matchesPattern(path, pattern) {
+			candidates = append(candidates, matchCandidate{
+				pattern:    pattern,
+				parserName: parserName,
+				priority:   getMatchPriority(pattern),
+			})
+		}
+	}
+
+	// Check global defaults
+	for pattern, parserName := range cfg.DefaultParsers {
+		if matchesPattern(path, pattern) {
+			candidates = append(candidates, matchCandidate{
+				pattern:    pattern,
+				parserName: parserName,
+				priority:   getMatchPriority(pattern),
+			})
+		}
+	}
+
+	if len(candidates) == 0 {
+		return "", false
+	}
+
+	// Find the best candidate
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.priority > best.priority {
+			best = c
+		} else if c.priority == best.priority {
+			// If priority is equal, pick the one with longer pattern length (more specific)
+			if len(c.pattern) > len(best.pattern) {
+				best = c
+			}
+		}
+	}
+
+	return best.parserName, true
+}
+
 func SyncCollection(proj *project.Project, collectionName string) error {
 	cfg, ok := proj.Config.Collections[collectionName]
 	if !ok {
 		return fmt.Errorf("collection %q not found in config", collectionName)
 	}
+
+	util.Logger.Info("Synchronizing collection", "name", collectionName, "path", cfg.Path)
 
 	absCollectionPath := filepath.Join(proj.RootPath, cfg.Path)
 	info, err := os.Stat(absCollectionPath)
@@ -43,17 +261,6 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("collection path %q is not a directory", absCollectionPath)
-	}
-
-	// Identify allowed extensions
-	var extensions []string
-	for _, p := range cfg.Parsers {
-		if extList, ok := parserExtensions[p]; ok {
-			extensions = append(extensions, extList...)
-		}
-	}
-	if len(extensions) == 0 {
-		extensions = []string{".md", ".markdown"}
 	}
 
 	db, err := proj.OpenFTS()
@@ -77,24 +284,18 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 			return nil
 		}
 
-		ext := strings.ToLower(filepath.Ext(path))
-		allowed := false
-		for _, e := range extensions {
-			if ext == e {
-				allowed = true
-				break
-			}
-		}
+		parserName, ok := ResolveParserName(proj.Config, collectionName, path)
+		if ok {
+			if _, registered := GetParser(parserName); registered {
+				relPath, err := filepath.Rel(proj.RootPath, path)
+				if err != nil {
+					return fmt.Errorf("failed to get relative path for %s: %w", path, err)
+				}
+				seenFiles[relPath] = true
 
-		if allowed {
-			relPath, err := filepath.Rel(proj.RootPath, path)
-			if err != nil {
-				return fmt.Errorf("failed to get relative path for %s: %w", path, err)
-			}
-			seenFiles[relPath] = true
-
-			if err := ingestFile(db, relPath, path, collectionName); err != nil {
-				return err
+				if err := ingestFile(db, relPath, path, collectionName, parserName, proj.Config); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -140,7 +341,7 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 	return nil
 }
 
-func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collectionName string) error {
+func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collectionName string, parserName string, cfg *config.Config) error {
 	info, err := os.Stat(absPath)
 	if err != nil {
 		return fmt.Errorf("failed to stat file %s: %w", absPath, err)
@@ -178,9 +379,11 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 		}
 	} else {
 		if fileRecord.ModifiedAt == mtime {
+			util.Logger.Debug("Skipping file (mtime matches)", "path", relPath)
 			return nil
 		}
 		if fileRecord.ContentHash == hash {
+			util.Logger.Debug("Skipping file (hash matches)", "path", relPath)
 			fileRecord.ModifiedAt = mtime
 			if err := db.SaveFile(fileRecord); err != nil {
 				return fmt.Errorf("failed to update modified time for %s: %w", relPath, err)
@@ -214,25 +417,32 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 		}
 	}
 
-	chunks, err := chunkContent(content, relPath, size)
-	if err != nil {
-		return fmt.Errorf("failed to chunk content of %s: %w", relPath, err)
+	parser, ok := GetParser(parserName)
+	if !ok {
+		return fmt.Errorf("parser %q not found in registry", parserName)
 	}
 
-	docRecord.ChunkCount = len(chunks)
-	docRecord.TotalChars = int64(len(content))
-	docMetadata := map[string]any{
-		"path": relPath,
-		"size": size,
+	util.Logger.Info("Ingesting file", "path", relPath, "parser", parserName)
+
+	parsedDoc, err := parser.Parse(relPath, content, size)
+	if err != nil {
+		return fmt.Errorf("failed to parse file %s using %s: %w", relPath, parserName, err)
 	}
-	docMetaBytes, _ := json.Marshal(docMetadata)
-	docRecord.Metadata = string(docMetaBytes)
+
+	slug := parsedDoc.Slug
+	if slug == "" {
+		slug = strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
+	}
+	docRecord.Slug = slug
+	docRecord.ChunkCount = len(parsedDoc.Chunks)
+	docRecord.TotalChars = int64(len(content))
+	docRecord.Metadata = parsedDoc.Metadata
 
 	if err := db.SaveDocument(docRecord); err != nil {
 		return fmt.Errorf("failed to save document for %s: %w", relPath, err)
 	}
 
-	for i, chunk := range chunks {
+	for i, chunk := range parsedDoc.Chunks {
 		chunk.DocumentID = docRecord.ID
 		chunk.ChunkIndex = i
 		if err := db.SaveChunk(chunk); err != nil {
@@ -241,56 +451,6 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 	}
 
 	return nil
-}
-
-func chunkContent(content string, filename string, fileSize int64) ([]*project.ChunkRecord, error) {
-	chunker := chunkx.NewChunker()
-	cxChunks, err := chunker.Chunk(
-		content,
-		chunkx.WithLanguage(languages.Markdown),
-		chunkx.WithMaxSize(DefaultChunkMaxSize),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	headers := parseHeaders(content)
-
-	var chunks []*project.ChunkRecord
-	for _, cx := range cxChunks {
-		sectionTitle := ""
-		sectionNum := 0
-		for idx, h := range headers {
-			if h.LineNumber <= cx.StartLine {
-				sectionTitle = h.Title
-				sectionNum = idx + 1
-			}
-		}
-
-		sum := sha256.Sum256([]byte(cx.Content))
-		chunkHash := fmt.Sprintf("%x", sum)
-
-		metaMap := map[string]any{
-			"filename":      filename,
-			"section_num":   sectionNum,
-			"section_title": sectionTitle,
-		}
-		metaBytes, _ := json.Marshal(metaMap)
-
-		chunks = append(chunks, &project.ChunkRecord{
-			ChunkIndex:   0,
-			TextContent:  cx.Content,
-			ContentHash:  chunkHash,
-			TotalChars:   int64(len(cx.Content)),
-			LineStart:    cx.StartLine,
-			LineEnd:      cx.EndLine,
-			SectionNum:   sectionNum,
-			SectionTitle: sectionTitle,
-			Metadata:     string(metaBytes),
-		})
-	}
-
-	return chunks, nil
 }
 
 func computeSHA256(filePath string) (string, error) {

@@ -388,3 +388,59 @@ func (f *FTSDatabase) SearchFTS(queryText string, collection string, limit int) 
 	}
 	return results, nil
 }
+
+// DBStats represents index statistics queried from the database.
+type DBStats struct {
+	TotalFiles        int64
+	TotalChunks       int64
+	TotalChars        int64
+	CollectionsCount  int64
+	DocsPerCollection map[string]int64
+}
+
+// GetStats returns summary statistics from the database.
+func (f *FTSDatabase) GetStats() (*DBStats, error) {
+	stats := &DBStats{
+		DocsPerCollection: make(map[string]int64),
+	}
+
+	// Total files
+	err := f.db.QueryRow("SELECT COUNT(*) FROM files").Scan(&stats.TotalFiles)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count files: %w", err)
+	}
+
+	// Total chunks
+	err = f.db.QueryRow("SELECT COUNT(*) FROM chunks").Scan(&stats.TotalChunks)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count chunks: %w", err)
+	}
+
+	// Total characters (sum of total_chars in chunks)
+	var totalChars sql.NullInt64
+	err = f.db.QueryRow("SELECT SUM(total_chars) FROM chunks").Scan(&totalChars)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sum total chars: %w", err)
+	}
+	stats.TotalChars = totalChars.Int64
+
+	// Collections count and documents per collection
+	rows, err := f.db.Query("SELECT collection, COUNT(*) FROM documents GROUP BY collection")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query documents per collection: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var collection string
+		var count int64
+		if err := rows.Scan(&collection, &count); err != nil {
+			return nil, fmt.Errorf("failed to scan collection stats: %w", err)
+		}
+		stats.DocsPerCollection[collection] = count
+		stats.CollectionsCount++
+	}
+
+	return stats, nil
+}
+

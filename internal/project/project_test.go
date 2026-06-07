@@ -355,3 +355,126 @@ func TestSQLiteDatabase(t *testing.T) {
 		t.Errorf("expected 0 FTS results after delete, got %d", len(ftsResults))
 	}
 }
+
+func TestGetStats(t *testing.T) {
+	db, err := OpenFTSDatabase(":memory:")
+	if err != nil {
+		t.Fatalf("failed to open in-memory db: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.InitSchema(); err != nil {
+		t.Fatalf("InitSchema failed: %v", err)
+	}
+
+	// Stats on empty database
+	stats, err := db.GetStats()
+	if err != nil {
+		t.Fatalf("GetStats failed: %v", err)
+	}
+	if stats.TotalFiles != 0 || stats.TotalChunks != 0 || stats.TotalChars != 0 || stats.CollectionsCount != 0 {
+		t.Errorf("expected empty stats, got %+v", stats)
+	}
+
+	// Insert test data
+	file1 := &FileRecord{
+		FilePath:    "docs/a.md",
+		Filename:    "a.md",
+		Size:        100,
+		ModifiedAt:  123,
+		ContentHash: "hash-a",
+	}
+	if err := db.SaveFile(file1); err != nil {
+		t.Fatalf("failed to save file: %v", err)
+	}
+
+	doc1 := &DocumentRecord{
+		FileID:     file1.ID,
+		Collection: "notes",
+		Slug:       "notes/a",
+		ChunkCount: 1,
+		TotalChars: 50,
+	}
+	if err := db.SaveDocument(doc1); err != nil {
+		t.Fatalf("failed to save doc: %v", err)
+	}
+
+	chunk1 := &ChunkRecord{
+		DocumentID:  doc1.ID,
+		ChunkIndex:  0,
+		TextContent: "hello world notes",
+		ContentHash: "hash-c1",
+		TotalChars:  17,
+	}
+	if err := db.SaveChunk(chunk1); err != nil {
+		t.Fatalf("failed to save chunk: %v", err)
+	}
+
+	file2 := &FileRecord{
+		FilePath:    "docs/b.md",
+		Filename:    "b.md",
+		Size:        200,
+		ModifiedAt:  456,
+		ContentHash: "hash-b",
+	}
+	if err := db.SaveFile(file2); err != nil {
+		t.Fatalf("failed to save file: %v", err)
+	}
+
+	doc2 := &DocumentRecord{
+		FileID:     file2.ID,
+		Collection: "wiki",
+		Slug:       "wiki/b",
+		ChunkCount: 2,
+		TotalChars: 80,
+	}
+	if err := db.SaveDocument(doc2); err != nil {
+		t.Fatalf("failed to save doc: %v", err)
+	}
+
+	chunk2a := &ChunkRecord{
+		DocumentID:  doc2.ID,
+		ChunkIndex:  0,
+		TextContent: "hello wiki first chunk",
+		ContentHash: "hash-c2a",
+		TotalChars:  22,
+	}
+	chunk2b := &ChunkRecord{
+		DocumentID:  doc2.ID,
+		ChunkIndex:  1,
+		TextContent: "hello wiki second chunk",
+		ContentHash: "hash-c2b",
+		TotalChars:  23,
+	}
+	if err := db.SaveChunk(chunk2a); err != nil {
+		t.Fatalf("failed to save chunk: %v", err)
+	}
+	if err := db.SaveChunk(chunk2b); err != nil {
+		t.Fatalf("failed to save chunk: %v", err)
+	}
+
+	stats, err = db.GetStats()
+	if err != nil {
+		t.Fatalf("GetStats failed: %v", err)
+	}
+
+	if stats.TotalFiles != 2 {
+		t.Errorf("expected 2 files, got %d", stats.TotalFiles)
+	}
+	if stats.TotalChunks != 3 {
+		t.Errorf("expected 3 chunks, got %d", stats.TotalChunks)
+	}
+	if stats.TotalChars != 62 { // 17 + 22 + 23 = 62
+		t.Errorf("expected 62 chars, got %d", stats.TotalChars)
+	}
+	if stats.CollectionsCount != 2 {
+		t.Errorf("expected 2 collections, got %d", stats.CollectionsCount)
+	}
+	if stats.DocsPerCollection["notes"] != 1 {
+		t.Errorf("expected 1 doc in 'notes', got %d", stats.DocsPerCollection["notes"])
+	}
+	if stats.DocsPerCollection["wiki"] != 1 {
+		t.Errorf("expected 1 doc in 'wiki', got %d", stats.DocsPerCollection["wiki"])
+	}
+}
+

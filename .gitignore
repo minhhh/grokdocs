@@ -32,3 +32,4 @@ go.work.sum
 /onnx-models/
 
 /cache
+/.grokdocs

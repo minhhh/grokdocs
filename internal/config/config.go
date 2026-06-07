@@ -9,28 +9,58 @@ import (
 
 // CollectionConfig defines configuration for a single ingest collection.
 type CollectionConfig struct {
-	Path    string   `yaml:"path"`
-	Parsers []string `yaml:"parsers"`
+	Path    string            `yaml:"path"`
+	Parsers map[string]string `yaml:"parsers"`
 }
 
 // Config represents the application configuration.
 type Config struct {
-	Collections map[string]CollectionConfig `yaml:"collections"`
+	DefaultParsers map[string]string           `yaml:"default_parsers"`
+	Collections    map[string]CollectionConfig `yaml:"collections"`
 }
 
 const (
 	DefaultCollectionName = "default"
 	DefaultCollectionPath = "."
-	DefaultParserName     = "markdown"
 )
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() *Config {
 	return &Config{
+		DefaultParsers: map[string]string{
+			".md":        "markdown",
+			".markdown":  "markdown",
+			".go":        "chunkx",
+			".py":        "chunkx",
+			".rs":        "chunkx",
+			".js":        "chunkx",
+			".jsx":       "chunkx",
+			".ts":        "chunkx",
+			".tsx":       "chunkx",
+			".html":      "chunkx",
+			".htm":       "chunkx",
+			".css":       "chunkx",
+			".sql":       "chunkx",
+			".yaml":      "chunkx",
+			".yml":       "chunkx",
+			".json":      "chunkx",
+			".java":      "chunkx",
+			".c":         "chunkx",
+			".cpp":       "chunkx",
+			".cc":        "chunkx",
+			".cs":        "chunkx",
+			".php":       "chunkx",
+			".rb":        "chunkx",
+			".sh":        "chunkx",
+			".bash":      "chunkx",
+			"Dockerfile": "chunkx",
+			".proto":     "chunkx",
+			".toml":      "chunkx",
+		},
 		Collections: map[string]CollectionConfig{
 			DefaultCollectionName: {
 				Path:    DefaultCollectionPath,
-				Parsers: []string{DefaultParserName},
+				Parsers: nil,
 			},
 		},
 	}
