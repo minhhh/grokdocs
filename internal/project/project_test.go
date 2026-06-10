@@ -94,6 +94,89 @@ func TestProjectInitializationAndLoading(t *testing.T) {
 	}
 }
 
+func TestReInitPreservesConfigContent(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	proj, err := NewProject(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proj.Init(); err != nil {
+		t.Fatalf("first Init() failed: %v", err)
+	}
+
+	configPath := filepath.Join(proj.ConfigDir, ConfigFileName)
+	original, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read config after init: %v", err)
+	}
+
+	if err := proj.Init(); err != nil {
+		t.Fatalf("second Init() failed: %v", err)
+	}
+
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read config after re-init: %v", err)
+	}
+	if string(original) != string(after) {
+		t.Error("config.yaml content changed after re-init")
+	}
+}
+
+func TestInitIsIdempotent(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	proj, err := NewProject(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First init creates the project
+	if err := proj.Init(); err != nil {
+		t.Fatalf("first Init() failed: %v", err)
+	}
+
+	// Snapshot file state
+	var before map[string]string
+	filepath.Walk(proj.ConfigDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(proj.ConfigDir, path)
+		data, _ := os.ReadFile(path)
+		if before == nil {
+			before = make(map[string]string)
+		}
+		before[rel] = string(data)
+		return nil
+	})
+
+	// Second init — should be a no-op
+	if err := proj.Init(); err != nil {
+		t.Fatalf("second Init() failed: %v", err)
+	}
+
+	// Verify no files were changed
+	filepath.Walk(proj.ConfigDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(proj.ConfigDir, path)
+		data, _ := os.ReadFile(path)
+		if before[rel] != string(data) {
+			t.Errorf("file %q changed after re-init", rel)
+		}
+		delete(before, rel)
+		return nil
+	})
+
+	// No new files
+	for rel := range before {
+		t.Errorf("file %q was removed after re-init", rel)
+	}
+}
+
 func TestInitFailsOnInvalidRootPath(t *testing.T) {
 	t.Run("nonexistent path", func(t *testing.T) {
 		proj, err := NewProject(filepath.Join(t.TempDir(), "no-such-dir"))

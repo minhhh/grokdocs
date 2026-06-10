@@ -43,21 +43,19 @@ func TestFileWalking(t *testing.T) {
 	}
 
 	// Mock project
-	proj := &project.Project{
-		RootPath: root,
-		Config: &config.Config{
-			Collections: map[string]config.CollectionConfig{
-				"default": {
-					Path:    "docs",
-					Parsers: map[string]string{".md": "markdown", ".markdown": "markdown"},
-				},
+	proj, err := project.NewProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj.Config = &config.Config{
+		Collections: map[string]config.CollectionConfig{
+			"default": {
+				Path:    "docs",
+				Parsers: map[string]string{".md": "markdown", ".markdown": "markdown"},
 			},
 		},
 	}
 
-	// Mock DB in memory to avoid actual SQLite writing if not needed, but SyncCollection calls db.OpenFTS.
-	// We can use a real FTS database inside proj.ConfigDir!
-	proj.ConfigDir = filepath.Join(root, ".grokdocs")
 	db, err := proj.OpenFTS()
 	if err != nil {
 		t.Fatalf("OpenFTS failed: %v", err)
@@ -194,16 +192,15 @@ We hope you enjoy searching locally and offline.
 		t.Fatal(err)
 	}
 
-	// Mock project
-	proj := &project.Project{
-		RootPath:  root,
-		ConfigDir: filepath.Join(root, ".grokdocs"),
-		Config: &config.Config{
-			Collections: map[string]config.CollectionConfig{
-				"default": {
-					Path:    "docs",
-					Parsers: map[string]string{".md": "markdown", ".markdown": "markdown"},
-				},
+	proj, err := project.NewProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj.Config = &config.Config{
+		Collections: map[string]config.CollectionConfig{
+			"default": {
+				Path:    "docs",
+				Parsers: map[string]string{".md": "markdown", ".markdown": "markdown"},
 			},
 		},
 	}
@@ -328,6 +325,29 @@ func TestFileFilterIncludeOnly(t *testing.T) {
 	}
 }
 
+func TestFileFilterIncludeFolder(t *testing.T) {
+	f := newFileFilter(nil, []string{"docs/**/*", "tests/**/*", "src/*.go"}, nil)
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"docs/intro.md", true},
+		{"main.go", false},
+		{"src/util.go", true},
+		{"src/main.ts", false},
+		{"style.css", false},
+		{"README.txt", false},
+		{"tests/test1.go", true},
+		{"tests/auth/test2.go", true},
+	}
+	for _, tc := range tests {
+		got := f.Match(tc.path)
+		if got != tc.want {
+			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
 func TestFileFilterExcludeOnly(t *testing.T) {
 	// No include => all files pass unless excluded
 	f := newFileFilter(nil, nil, []string{"*.txt", "*.log"})
@@ -442,18 +462,18 @@ func TestSyncCollectionWithFileFiltering(t *testing.T) {
 		}
 	}
 
-	proj := &project.Project{
-		RootPath:  root,
-		ConfigDir: filepath.Join(root, ".grokdocs"),
-		Config: &config.Config{
-			Collections: map[string]config.CollectionConfig{
-				"default": {
-					Path:    "docs",
-					Parsers: map[string]string{".md": "markdown"},
-					Files:   []string{"README.md"},
-					Include: []string{"*.md"},
-					Exclude: []string{"api.md"},
-				},
+	proj, err := project.NewProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj.Config = &config.Config{
+		Collections: map[string]config.CollectionConfig{
+			"default": {
+				Path:    "docs",
+				Parsers: map[string]string{".md": "markdown"},
+				Files:   []string{"README.md"},
+				Include: []string{"*.md"},
+				Exclude: []string{"api.md"},
 			},
 		},
 	}

@@ -21,6 +21,11 @@ const (
 	DefaultChunkMaxSize = 500
 )
 
+// defaultIncludeList contains glob patterns used when a collection has no
+// explicit include or files field. These match common documentation and
+// source file extensions by basename (e.g. *.md matches intro.md in any dir).
+var defaultIncludeList = []string{"*.md", "*.markdown", "*.go", "*.py", "*.rs", "*.ts", "*.js", "*.yaml", "*.yml", "*.toml", "*.json", "*.txt"}
+
 // defaultExcludeList contains patterns for files and directories that are
 // excluded by default when no user-specified exclude list is configured.
 // Patterns are matched against the basename using filepath.Match.
@@ -281,7 +286,12 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 		excludeList = defaultExcludeList
 	}
 
-	fileFilter := newFileFilter(cfg.Files, cfg.Include, excludeList)
+	includeList := cfg.Include
+	if len(cfg.Files) == 0 && len(includeList) == 0 {
+		includeList = defaultIncludeList
+	}
+
+	fileFilter := newFileFilter(cfg.Files, includeList, excludeList)
 
 	absCollectionPath := filepath.Join(proj.RootPath, cfg.Path)
 	info, err := os.Stat(absCollectionPath)
@@ -494,6 +504,19 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 }
 
 // fileFilter applies files/include/exclude rules from a collection config.
+//
+// Field precedence:
+//   - files:  explicit filenames (basename match). When set, exclude is ignored.
+//             Example: ["README.md", "index.md"]
+//   - include: glob patterns, matched against basename or full path (supports **).
+//             Example: ["*.md", "docs/**/*.go"] — matches any .md (any dir),
+//             or any .go under docs/ recursively
+//   - exclude: glob patterns matched against basename.
+//             Example: ["*_test.go", "*.txt"]
+//
+// When files is set, a path passes if its basename matches any entry in files
+// OR if include matches. When files is not set, include acts as a whitelist
+// (if specified) and exclude as a blacklist applied after include.
 type fileFilter struct {
 	files   []string
 	include []string
@@ -505,30 +528,27 @@ func newFileFilter(files, include, exclude []string) *fileFilter {
 }
 
 func (f *fileFilter) Match(path string) bool {
-	base := filepath.Base(path)
-
 	// If files is specified, only match files listed in files OR matching include globs
 	if len(f.files) > 0 {
+		base := filepath.Base(path)
 		for _, name := range f.files {
 			if base == name {
 				return true
 			}
 		}
 		for _, pattern := range f.include {
-			matched, err := filepath.Match(pattern, base)
-			if err == nil && matched {
+			if matchGlob(path, pattern) {
 				return true
 			}
 		}
 		return false
 	}
 
-	// No explicit files list: apply include/exclude globs
+	// No explicit files list: apply include as whitelist
 	if len(f.include) > 0 {
 		matched := false
 		for _, pattern := range f.include {
-			m, err := filepath.Match(pattern, base)
-			if err == nil && m {
+			if matchGlob(path, pattern) {
 				matched = true
 				break
 			}
@@ -538,6 +558,8 @@ func (f *fileFilter) Match(path string) bool {
 		}
 	}
 
+	// Apply exclude (always matched against basename)
+	base := filepath.Base(path)
 	for _, pattern := range f.exclude {
 		matched, err := filepath.Match(pattern, base)
 		if err == nil && matched {
@@ -546,6 +568,59 @@ func (f *fileFilter) Match(path string) bool {
 	}
 
 	return true
+}
+
+// matchGlob reports whether path matches pattern, supporting ** for recursive
+// directory matching (tsconfig-style). Without ** it falls back to basename
+// matching for backward compatibility.
+func matchGlob(path, pattern string) bool {
+	if !strings.Contains(pattern, "**") {
+		if strings.Contains(pattern, "/") {
+			matched, err := filepath.Match(pattern, path)
+			return err == nil && matched
+		}
+		base := filepath.Base(path)
+		matched, err := filepath.Match(pattern, base)
+		return err == nil && matched
+	}
+
+	path = filepath.ToSlash(path)
+	pattern = filepath.ToSlash(pattern)
+
+	patParts := strings.Split(pattern, "/")
+	pathParts := strings.Split(path, "/")
+	return matchGlobParts(pathParts, patParts)
+}
+
+func matchGlobParts(pathParts, patParts []string) bool {
+	if len(patParts) == 0 {
+		return len(pathParts) == 0
+	}
+
+	if len(pathParts) == 0 {
+		return allDoubleStar(patParts)
+	}
+
+	p := patParts[0]
+
+	if p == "**" {
+		for i := 0; i <= len(pathParts); i++ {
+			if matchGlobParts(pathParts[i:], patParts[1:]) {
+				return true
+			}
+		}
+		return false
+	}
+
+	matched, err := filepath.Match(p, pathParts[0])
+	if err != nil || !matched {
+		return false
+	}
+	return matchGlobParts(pathParts[1:], patParts[1:])
+}
+
+func allDoubleStar(parts []string) bool {
+	return len(parts) == 0 || (parts[0] == "**" && allDoubleStar(parts[1:]))
 }
 
 func computeSHA256(filePath string) (string, error) {

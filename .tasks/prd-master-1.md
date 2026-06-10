@@ -74,6 +74,15 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
         - Replace `proj.Load()` with `proj.Init()` in project_test.go
   - [x] Add test: `Init()` fails gracefully when `NewProject` is given an invalid root path
         - Create a regular file at a temp path, call `NewProject` with a subpath of that file, expect `Init()` to return an error (MkdirAll fails because parent is a file, not a directory)
+  - [x] Add test: `Init()` is idempotent on an existing project — config and other files remain unchanged
+  - [x] Change CLI log message when re-initializing an existing project: detect if config.yaml already exists in `.grokdocs/` and print "Project already initialized in ..." instead of "Initialized empty grokdocs project ..."
+        - Add a test verifying config.yaml content is preserved on re-init (e.g., read content before and after second Init(), assert identical)
+  - [x] Add a default list of file extensions used when `include` is not specified in a collection
+        - Define a default `include` list (e.g. `*.md`, `*.go`) that applies when a collection has no explicit `include` field
+        - [x] Add comment with examples to the `FileFilter` struct fields (Files, Include, Exclude) explaining behavior and precedence
+  - [x] Fix the test case `TestFileFilterIncludeFolder`: `include` must handle glob patterns like `src/**/*.ts` (tsconfig-style) to match files in subdirectories
+        - [x] Update `fileFilter` to support `**` recursive glob patterns via `matchGlob`/`matchGlobParts`
+        - [x] Add test verifying `include: ["docs/**/*"]` matches `docs/subdir/guide.md` (pre-existing `TestFileFilterIncludeFolder` now passes)
 
 - **Validation**:
   - [x] `go build ./...` compiles cleanly
