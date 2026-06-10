@@ -11,6 +11,9 @@ import (
 type CollectionConfig struct {
 	Path    string            `yaml:"path"`
 	Parsers map[string]string `yaml:"parsers"`
+	Files   []string          `yaml:"files"`
+	Include []string          `yaml:"include"`
+	Exclude []string          `yaml:"exclude"`
 }
 
 // Config represents the application configuration.

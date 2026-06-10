@@ -2,23 +2,37 @@ package util
 
 import (
 	"bytes"
-	"log/slog"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
 )
 
-func TestLoggerTextFormat(t *testing.T) {
+func TestLoggerTextDefault(t *testing.T) {
 	var buf bytes.Buffer
-	InitLogger(&buf, slog.LevelInfo, FormatText)
+	InitLogger(&buf, false, FormatText)
 
-	Logger.Info("hello test message", "key", "val")
+	Logger.Info().Str("key", "val").Msg("hello test message")
 
 	output := buf.String()
-	if !strings.Contains(output, "level=INFO") {
-		t.Errorf("expected output to contain level=INFO, got %q", output)
+	if !strings.Contains(output, "hello test message") {
+		t.Errorf("expected output to contain message, got %q", output)
 	}
-	if !strings.Contains(output, "msg=\"hello test message\"") {
-		t.Errorf("expected output to contain msg, got %q", output)
+}
+
+func TestLoggerTextVerbose(t *testing.T) {
+	var buf bytes.Buffer
+	InitLogger(&buf, true, FormatText)
+
+	Logger.Info().Str("key", "val").Msg("verbose message")
+
+	output := buf.String()
+	if !strings.Contains(output, "INF") {
+		t.Errorf("expected verbose output to contain level, got %q", output)
+	}
+	if !strings.Contains(output, "verbose message") {
+		t.Errorf("expected output to contain message, got %q", output)
 	}
 	if !strings.Contains(output, "key=val") {
 		t.Errorf("expected output to contain key=val, got %q", output)
@@ -27,38 +41,60 @@ func TestLoggerTextFormat(t *testing.T) {
 
 func TestLoggerJSONFormat(t *testing.T) {
 	var buf bytes.Buffer
-	InitLogger(&buf, slog.LevelDebug, FormatJSON)
+	InitLogger(&buf, true, FormatJSON)
 
-	Logger.Debug("debug json message", "number", 42)
+	Logger.Debug().Int("number", 42).Msg("debug json message")
 
 	output := buf.String()
-	if !strings.Contains(output, `"level":"DEBUG"`) {
-		t.Errorf("expected JSON level DEBUG, got %q", output)
+	if !strings.Contains(output, `"level":"debug"`) {
+		t.Errorf("expected JSON level debug, got %q", output)
 	}
-	if !strings.Contains(output, `"msg":"debug json message"`) {
-		t.Errorf("expected JSON msg, got %q", output)
+	if !strings.Contains(output, `"message":"debug json message"`) {
+		t.Errorf("expected JSON message, got %q", output)
 	}
 	if !strings.Contains(output, `"number":42`) {
 		t.Errorf("expected JSON attribute number:42, got %q", output)
 	}
 }
 
-func TestLoggerLevelsFiltering(t *testing.T) {
+func TestLoggerNonVerboseFiltersInfo(t *testing.T) {
 	var buf bytes.Buffer
-	InitLogger(&buf, slog.LevelWarn, FormatText)
+	InitLogger(&buf, false, FormatText)
 
-	Logger.Debug("this should not show up")
-	Logger.Info("neither should this")
-	Logger.Warn("this warn message should show up")
+	Logger.Debug().Msg("this should not show up")
+	Logger.Trace().Msg("neither should this")
+	Logger.Warn().Msg("this warn should show up")
 
 	output := buf.String()
 	if strings.Contains(output, "this should not show up") {
-		t.Error("expected debug message to be filtered out")
+		t.Error("expected debug message to be filtered out in non-verbose mode")
 	}
 	if strings.Contains(output, "neither should this") {
-		t.Error("expected info message to be filtered out")
+		t.Error("expected trace message to be filtered out in non-verbose mode")
 	}
-	if !strings.Contains(output, "this warn message should show up") {
+	if !strings.Contains(output, "this warn should show up") {
 		t.Error("expected warn message to be recorded")
+	}
+}
+
+func TestLoggerVerboseShowsTrace(t *testing.T) {
+	var buf bytes.Buffer
+	InitLogger(&buf, true, FormatText)
+
+	Logger.Trace().Msg("trace message only in verbose")
+
+	output := buf.String()
+	if !strings.Contains(output, "trace message only in verbose") {
+		t.Errorf("expected trace message to appear in verbose mode, got %q", output)
+	}
+}
+
+func TestDefaultLoggerLevel(t *testing.T) {
+	saved := Logger
+	Logger = zerolog.New(os.Stderr).Level(zerolog.InfoLevel)
+	defer func() { Logger = saved }()
+
+	if Logger.GetLevel() != zerolog.InfoLevel {
+		t.Errorf("expected default level to be InfoLevel, got %v", Logger.GetLevel())
 	}
 }

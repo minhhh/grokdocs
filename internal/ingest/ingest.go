@@ -252,7 +252,9 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 		return fmt.Errorf("collection %q not found in config", collectionName)
 	}
 
-	util.Logger.Info("Synchronizing collection", "name", collectionName, "path", cfg.Path)
+	util.Logger.Info().Str("name", collectionName).Str("path", cfg.Path).Msg("Synchronizing collection")
+
+	fileFilter := newFileFilter(cfg.Files, cfg.Include, cfg.Exclude)
 
 	absCollectionPath := filepath.Join(proj.RootPath, cfg.Path)
 	info, err := os.Stat(absCollectionPath)
@@ -290,6 +292,10 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 				relPath, err := filepath.Rel(proj.RootPath, path)
 				if err != nil {
 					return fmt.Errorf("failed to get relative path for %s: %w", path, err)
+				}
+
+				if !fileFilter.Match(relPath) {
+					return nil
 				}
 				seenFiles[relPath] = true
 
@@ -379,11 +385,11 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 		}
 	} else {
 		if fileRecord.ModifiedAt == mtime {
-			util.Logger.Debug("Skipping file (mtime matches)", "path", relPath)
+			util.Logger.Debug().Str("path", relPath).Msg("Skipping file (mtime matches)")
 			return nil
 		}
 		if fileRecord.ContentHash == hash {
-			util.Logger.Debug("Skipping file (hash matches)", "path", relPath)
+			util.Logger.Debug().Str("path", relPath).Msg("Skipping file (hash matches)")
 			fileRecord.ModifiedAt = mtime
 			if err := db.SaveFile(fileRecord); err != nil {
 				return fmt.Errorf("failed to update modified time for %s: %w", relPath, err)
@@ -422,7 +428,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 		return fmt.Errorf("parser %q not found in registry", parserName)
 	}
 
-	util.Logger.Info("Ingesting file", "path", relPath, "parser", parserName)
+	util.Logger.Info().Str("path", relPath).Str("parser", parserName).Msg("Ingesting file")
 
 	parsedDoc, err := parser.Parse(relPath, content, size)
 	if err != nil {
@@ -451,6 +457,61 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 	}
 
 	return nil
+}
+
+// fileFilter applies files/include/exclude rules from a collection config.
+type fileFilter struct {
+	files   []string
+	include []string
+	exclude []string
+}
+
+func newFileFilter(files, include, exclude []string) *fileFilter {
+	return &fileFilter{files: files, include: include, exclude: exclude}
+}
+
+func (f *fileFilter) Match(path string) bool {
+	base := filepath.Base(path)
+
+	// If files is specified, only match files listed in files OR matching include globs
+	if len(f.files) > 0 {
+		for _, name := range f.files {
+			if base == name {
+				return true
+			}
+		}
+		for _, pattern := range f.include {
+			matched, err := filepath.Match(pattern, base)
+			if err == nil && matched {
+				return true
+			}
+		}
+		return false
+	}
+
+	// No explicit files list: apply include/exclude globs
+	if len(f.include) > 0 {
+		matched := false
+		for _, pattern := range f.include {
+			m, err := filepath.Match(pattern, base)
+			if err == nil && m {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	for _, pattern := range f.exclude {
+		matched, err := filepath.Match(pattern, base)
+		if err == nil && matched {
+			return false
+		}
+	}
+
+	return true
 }
 
 func computeSHA256(filePath string) (string, error) {

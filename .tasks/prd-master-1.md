@@ -25,6 +25,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 - **PRD-011**: Implement status and status root CLI commands.
 - **PRD-012**: Move Util to Internal and Expose Logger Variable.
 - **PRD-013**: Refactor InitLogger Parameter to slog.Level.
+- **PRD-014**: Refactor Configuration with File Selection and Glob Filtering.
 
 ---
 
@@ -32,7 +33,9 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Current tracker.*
 
-- [x] **PRD-013**: Refactor InitLogger Parameter to slog.Level
+- [x] **PRD-014**: Refactor Configuration with File Selection and Glob Filtering
+- [x] **PRD-015**: Replace slog with rs/zerolog and Add Verbose Mode
+- [ ] **PRD-016**: Add --version CLI Option
 
 ---
 
@@ -40,15 +43,21 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Only contains details/checklists for active tasks in Section 2.*
 
-### PRD-013: Refactor InitLogger Parameter to slog.Level
+### PRD-014: Refactor Configuration with File Selection and Glob Filtering
 
-- **Objective**: Refactor `InitLogger` in `internal/util/logger.go` to accept the `slog.Level` parameter directly instead of a string to improve type safety and simplify string parsing.
+- **Objective**: Update the configuration models and synchronization logic to support collection-level file selection and filtering via three fields: `files` (array of exact file names), `include` (array of globs), and `exclude` (array of globs). Support logical rules for merging `files` and `include`, and making `files` and `exclude` mutually exclusive.
 
 - **Checklist**:
-  - [x] Modify `InitLogger` signature in `internal/util/logger.go` to accept `slog.Level` instead of `string`.
-  - [x] Remove the internal string-to-level parsing logic from `InitLogger`.
-  - [x] Update call sites of `InitLogger` in `cmd/grokdocs/root.go` to map string input to `slog.Level` before calling it.
-  - [x] Update `logger_test.go` to call `InitLogger` with `slog.Level` directly.
+  - [x] Update `CollectionConfig` struct in `internal/config/config.go` to add `files`, `include`, and `exclude` fields.
+  - [x] Add YAML serialization/deserialization tags and defaults.
+  - [x] Refactor the directory walking and ingestion filtering in `internal/ingest` to respect:
+    - If `files` is specified (not empty):
+      - Only ingest files explicitly listed in `files` OR matching any of the glob patterns in `include` (merging `files` and `include`).
+      - Completely ignore `exclude` patterns.
+    - If `files` is empty or not specified:
+      - Scan the folder using `include` patterns (if any) and filter out any files matching `exclude` patterns.
+  - [x] Write unit tests to verify glob filtering, merging of `files` and `include`, and mutual exclusion of `files` and `exclude`.
+  - [x] Combine all SQL queries in `internal/project/fts.go` into a single initialization query for the whole database, bundling all table definitions, FTS5 virtual table, triggers, and indices into one statement.
 
 - **Validation**:
   - [x] Verify that the codebase compiles cleanly.
@@ -56,14 +65,60 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 ---
 
+### PRD-015: Replace slog with rs/zerolog and Add Verbose Mode
+
+- **Objective**: Replace `log/slog` with `rs/zerolog` for improved performance and structured logging. Add a `--verbose` / `-v` flag to the CLI. In default mode, output is minimal (no timestamps, only INFO+). In verbose mode, output includes timestamps and log level labels, with the threshold set to TRACE.
+
+- **Checklist**:
+  - [x] Add `rs/zerolog` dependency via `go get github.com/rs/zerolog`.
+  - [x] Rewrite `internal/util/logger.go` to use zerolog instead of slog:
+    - Remove `LogFormat` opaque struct pattern; zerolog natively supports `zerolog.ConsoleWriter` for human-readable output and raw JSON for machine output.
+    - Replace `var Logger *slog.Logger` with `var Logger zerolog.Logger`.
+    - `InitLogger` signature changes to accept `io.Writer`, `verbose bool`, and `format LogFormat` (text/json).
+    - In default mode: no timestamp, no level label (except for WARN/ERROR), output starts at INFO.
+    - In verbose mode: include timestamp with milliseconds, print level label (TRACE, DEBUG, INFO, WARN, ERROR, FATAL), threshold set to TRACE.
+  - [x] Add `--verbose` / `-v` global flag to `cmd/grokdocs/root.go`:
+    - When `-v` is set, pass `verbose=true` to `InitLogger`.
+    - Default (`verbose=false`): minimal output, INFO threshold.
+    - Verbose (`verbose=true`): timestamp + level labels, TRACE threshold.
+  - [x] Update all logging call sites from `util.Logger.Info(...)` to `util.Logger.Info().Msg(...)` (zerolog's fluent API).
+  - [x] Rewrite `internal/util/logger_test.go` to test zerolog output:
+    - Test default mode: no timestamp, INFO+ only.
+    - Test verbose mode: timestamp present, TRACE messages shown.
+    - Test JSON format output.
+    - Test level filtering.
+
+- **Validation**:
+  - [x] Verify that the codebase compiles cleanly.
+  - [x] Run all tests using `go test -tags fts5 ./...` and ensure they pass.
+  - [ ] Manually verify CLI output: `grokdocs sync` (default) vs `grokdocs -v sync` (verbose).
+
+---
+
+### PRD-016: Add --version CLI Option
+
+- **Objective**: Add a `--version` flag to the root CLI command that prints the application version and exits. Use `ldflags` to inject the version at build time, with a fallback to `dev` when not set.
+
+- **Checklist**:
+  - [ ] Set `Version` field on the root Cobra command to `"dev"` as default.
+  - [ ] Wire a `version` variable via `ldflags` in the Makefile: `-X github.com/minhhh/grokdocs/cmd/grokdocs.version=$(VERSION)`.
+  - [ ] Verify `grokdocs --version` prints the version string.
+  - [ ] Add a `version` subcommand as an alias that also prints the version (standard Cobra convention).
+
+- **Validation**:
+  - [ ] Run `go build -tags fts5 -ldflags "-X github.com/minhhh/grokdocs/cmd/grokdocs.version=1.0.0" -o /tmp/grokdocs ./cmd/grokdocs && /tmp/grokdocs --version` prints `grokdocs version 1.0.0`.
+  - [ ] Run `go build -tags fts5 -o /tmp/grokdocs ./cmd/grokdocs && /tmp/grokdocs --version` prints `grokdocs version dev`.
+
+---
+
 ## 4. Future Roadmap & Backlog
 
 *Placeholders for future tasks.*
 
-- [ ] **PRD-014**: Integrate local ONNX models to convert chunks to vectors on-device
-- [ ] **PRD-015**: Integrate FAISS via `go-faiss` to store vectors and perform similarity searches
+- [ ] **PRD-017**: Integrate local ONNX models to convert chunks to vectors on-device
+- [ ] **PRD-018**: Integrate FAISS via `go-faiss` to store vectors and perform similarity searches
 
-### PRD-014: Integrate local ONNX models to convert chunks to vectors on-device
+### PRD-017: Integrate local ONNX models to convert chunks to vectors on-device
 
 - **Objective**: Use a local ONNX model (such as `all-MiniLM-L6-v2` or `bge-small-en-v1.5`) to generate vector embeddings for text chunks. The application should dynamically download the model and tokenizer files on first run if they are not cached.
 
@@ -80,7 +135,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
     - The downloader successfully retrieves the model and tokenizer files.
     - Loading the model and embedding a test text sentence returns a valid floating-point slice of expected dimension (e.g., 384 float values for MiniLM).
 
-### PRD-015: Integrate FAISS via go-faiss to store vectors and perform similarity searches
+### PRD-018: Integrate FAISS via go-faiss to store vectors and perform similarity searches
 
 - **Objective**: Embed FAISS index storage and similarity search capability using the `go-faiss` bindings inside the `VectorDatabase` wrapper.
 
@@ -110,6 +165,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 - [x] **PRD-010**: Add Util Package and Slog Logger Wrapper
 - [x] **PRD-011**: Implement status and status root CLI commands
 - [x] **PRD-012**: Move Util to Internal and Expose Logger Variable
+- [x] **PRD-013**: Refactor InitLogger Parameter to slog.Level
 
 ### PRD-001: Scaffold Go Project Structure
 
@@ -313,4 +369,18 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
   - [x] Verify that the codebase compiles cleanly.
   - [x] Run `go test -tags fts5 ./...` to ensure all tests pass.
   - [x] Verify that running CLI commands produces structured log outputs as expected.
+
+### PRD-013: Refactor InitLogger Parameter to slog.Level
+
+- **Objective**: Refactor `InitLogger` in `internal/util/logger.go` to accept the `slog.Level` parameter directly instead of a string to improve type safety and simplify string parsing.
+
+- **Checklist**:
+  - [x] Modify `InitLogger` signature in `internal/util/logger.go` to accept `slog.Level` instead of `string`.
+  - [x] Remove the internal string-to-level parsing logic from `InitLogger`.
+  - [x] Update call sites of `InitLogger` in `cmd/grokdocs/root.go` to map string input to `slog.Level` before calling it.
+  - [x] Update `logger_test.go` to call `InitLogger` with `slog.Level` directly.
+
+- **Validation**:
+  - [x] Verify that the codebase compiles cleanly.
+  - [x] Run all tests using `go test -tags fts5 ./...` and ensure they pass.
 

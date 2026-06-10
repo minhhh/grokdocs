@@ -1,38 +1,143 @@
 package util
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
-	"log/slog"
 	"os"
+	"strings"
+	"time"
+
+	"github.com/rs/zerolog"
 )
 
-// LogFormat defines the format of the logger output (JSON or Text).
-// It is an opaque struct to prevent callers from passing arbitrary values.
-type LogFormat struct {
-	id int
+// LogFormat defines the format of the logger output (text or JSON).
+type LogFormat int
+
+const (
+	FormatText LogFormat = iota
+	FormatJSON
+)
+
+func init() {
+	zerolog.TimeFieldFormat = time.StampMilli
 }
 
-var (
-	FormatText = LogFormat{id: 0}
-	FormatJSON = LogFormat{id: 1}
-)
+// Logger is the global structured logger.
+var Logger zerolog.Logger = zerolog.New(&minimalWriter{w: os.Stderr}).Level(zerolog.InfoLevel)
 
-// Logger is the global structured logger. It is initialized with a default fallback to os.Stderr.
-var Logger *slog.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+// verboseWriter formats log events with timestamp and level label.
+type verboseWriter struct {
+	w io.Writer
+}
 
-// InitLogger initializes the global structured logger with the specified writer, level, and format.
-func InitLogger(w io.Writer, level slog.Level, format LogFormat) {
-	opts := &slog.HandlerOptions{
-		Level: level,
+func (vw *verboseWriter) Write(p []byte) (int, error) {
+	var evt map[string]any
+	if err := json.Unmarshal(p, &evt); err != nil {
+		return len(p), nil
 	}
 
-	var handler slog.Handler
+	ts, _ := evt["time"].(string)
+	lvl, _ := evt["level"].(string)
+	msg, _ := evt["message"].(string)
+
+	parts := []string{}
+	if ts != "" {
+		parts = append(parts, ts)
+	}
+	if lvl != "" {
+		switch lvl {
+		case "trace":
+			lvl = "TRC"
+		case "debug":
+			lvl = "DBG"
+		case "info":
+			lvl = "INF"
+		case "warn":
+			lvl = "WRN"
+		case "error":
+			lvl = "ERR"
+		case "fatal":
+			lvl = "FTL"
+		case "panic":
+			lvl = "PAN"
+		}
+		parts = append(parts, lvl)
+	}
+	parts = append(parts, msg)
+
+	// Append key=val fields
+	for k, v := range evt {
+		if k == "time" || k == "level" || k == "message" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+	}
+
+	fmt.Fprintln(vw.w, strings.Join(parts, " "))
+	return len(p), nil
+}
+
+// minimalWriter formats log events without timestamp or level label (except
+// WARN/ERROR which get a level prefix).
+type minimalWriter struct {
+	w io.Writer
+}
+
+func (mw *minimalWriter) Write(p []byte) (int, error) {
+	var evt map[string]any
+	if err := json.Unmarshal(p, &evt); err != nil {
+		return len(p), nil
+	}
+
+	lvl, _ := evt["level"].(string)
+	msg, _ := evt["message"].(string)
+
+	prefix := ""
+	if lvl == "warn" {
+		prefix = "WARN: "
+	} else if lvl == "error" || lvl == "fatal" || lvl == "panic" {
+		prefix = "ERROR: "
+	}
+
+	parts := []string{prefix + msg}
+
+	// Append key=val fields
+	for k, v := range evt {
+		if k == "time" || k == "level" || k == "message" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+	}
+
+	fmt.Fprintln(mw.w, strings.Join(parts, " "))
+	return len(p), nil
+}
+
+// InitLogger initializes the global logger.
+func InitLogger(w io.Writer, verbose bool, format LogFormat) {
+	var out io.Writer
+	withTimestamp := false
 	if format == FormatJSON {
-		handler = slog.NewJSONHandler(w, opts)
+		out = w
+		withTimestamp = true
+	} else if verbose {
+		out = &verboseWriter{w: w}
+		withTimestamp = true
 	} else {
-		handler = slog.NewTextHandler(w, opts)
+		out = &minimalWriter{w: w}
 	}
 
-	Logger = slog.New(handler)
-	slog.SetDefault(Logger)
+	var lvl zerolog.Level
+	if verbose {
+		lvl = zerolog.TraceLevel
+	} else {
+		lvl = zerolog.InfoLevel
+	}
+
+	l := zerolog.New(out)
+	if withTimestamp {
+		l = l.With().Timestamp().Logger()
+	}
+	Logger = l.Level(lvl)
 }

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 
@@ -12,16 +11,20 @@ import (
 
 const DefaultStartDir = "."
 
+// version is set at build time via ldflags.
+var version = "dev"
+
 var (
 	projectPath string
-	logLevel    string
+	verbose     bool
 	logFormat   string
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "grokdocs",
-	Short: "grokdocs is a local-first documentation and code indexer",
-	Long:  `grokdocs is a local-first search engine that indexes your Markdown and code files for semantic and full-text search.`,
+	Use:     "grokdocs",
+	Short:   "grokdocs is a local-first documentation and code indexer",
+	Long:    `grokdocs is a local-first search engine that indexes your Markdown and code files for semantic and full-text search.`,
+	Version: version,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		var fmtVal util.LogFormat
 		if strings.ToLower(logFormat) == "json" {
@@ -30,19 +33,7 @@ var rootCmd = &cobra.Command{
 			fmtVal = util.FormatText
 		}
 
-		var lvl slog.Level
-		switch strings.ToLower(logLevel) {
-		case "debug":
-			lvl = slog.LevelDebug
-		case "warn":
-			lvl = slog.LevelWarn
-		case "error":
-			lvl = slog.LevelError
-		default:
-			lvl = slog.LevelInfo
-		}
-
-		util.InitLogger(os.Stderr, lvl, fmtVal)
+		util.InitLogger(os.Stderr, verbose, fmtVal)
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.Help()
@@ -58,6 +49,6 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&projectPath, "project", "p", "", "Project root path")
-	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output with timestamps and TRACE log level")
 	rootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "text", "Log format (text, json)")
 }

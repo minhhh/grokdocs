@@ -16,16 +16,15 @@ type FTSDatabase struct {
 const (
 	SQLiteDriverName = "sqlite3"
 
-	createFilesTableSQL = `CREATE TABLE IF NOT EXISTS files (
+	createAllTablesSQL = `CREATE TABLE IF NOT EXISTS files (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			file_path TEXT UNIQUE NOT NULL,
 			filename TEXT NOT NULL,
 			size INTEGER NOT NULL,
 			modified_at INTEGER NOT NULL,
 			content_hash TEXT NOT NULL
-		);`
-
-	createDocumentsTableSQL = `CREATE TABLE IF NOT EXISTS documents (
+		);
+		CREATE TABLE IF NOT EXISTS documents (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			file_id INTEGER NOT NULL,
 			collection TEXT NOT NULL,
@@ -35,9 +34,8 @@ const (
 			metadata TEXT,
 			FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
 			UNIQUE(file_id, collection)
-		);`
-
-	createChunksTableSQL = `CREATE TABLE IF NOT EXISTS chunks (
+		);
+		CREATE TABLE IF NOT EXISTS chunks (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			document_id INTEGER NOT NULL,
 			chunk_index INTEGER NOT NULL,
@@ -50,23 +48,19 @@ const (
 			section_title TEXT NOT NULL,
 			metadata TEXT,
 			FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
-		);`
-
-	createChunksFTSTableSQL = `CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+		);
+		CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 			text_content,
 			content='chunks',
 			content_rowid='id'
-		);`
-
-	createChunksInsertTriggerSQL = `CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+		);
+		CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
 			INSERT INTO chunks_fts(rowid, text_content) VALUES (new.id, new.text_content);
-		END;`
-
-	createChunksDeleteTriggerSQL = `CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+		END;
+		CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
 			INSERT INTO chunks_fts(chunks_fts, rowid, text_content) VALUES('delete', old.id, old.text_content);
-		END;`
-
-	createChunksUpdateTriggerSQL = `CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+		END;
+		CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
 			INSERT INTO chunks_fts(chunks_fts, rowid, text_content) VALUES('delete', old.id, old.text_content);
 			INSERT INTO chunks_fts(rowid, text_content) VALUES (new.id, new.text_content);
 		END;`
@@ -146,31 +140,14 @@ func (f *FTSDatabase) DB() *sql.DB {
 	return f.db
 }
 
-// InitSchema initializes database tables and indices.
+// InitSchema initializes database tables, FTS5 virtual table, and triggers.
 func (f *FTSDatabase) InitSchema() error {
-	// Enable foreign keys
-	_, err := f.db.Exec("PRAGMA foreign_keys = ON;")
-	if err != nil {
+	if _, err := f.db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
 		return fmt.Errorf("failed to enable foreign keys: %w", err)
 	}
-
-	// Create tables and virtual FTS5 tables
-	queries := []string{
-		createFilesTableSQL,
-		createDocumentsTableSQL,
-		createChunksTableSQL,
-		createChunksFTSTableSQL,
-		createChunksInsertTriggerSQL,
-		createChunksDeleteTriggerSQL,
-		createChunksUpdateTriggerSQL,
+	if _, err := f.db.Exec(createAllTablesSQL); err != nil {
+		return fmt.Errorf("failed to execute schema: %w\nQuery: %s", err, createAllTablesSQL)
 	}
-
-	for _, query := range queries {
-		if _, err := f.db.Exec(query); err != nil {
-			return fmt.Errorf("failed to execute schema query: %w\nQuery: %s", err, query)
-		}
-	}
-
 	return nil
 }
 
