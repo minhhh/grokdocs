@@ -18,8 +18,7 @@ type CollectionConfig struct {
 
 // Config represents the application configuration.
 type Config struct {
-	DefaultParsers map[string]string           `yaml:"default_parsers"`
-	Collections    map[string]CollectionConfig `yaml:"collections"`
+	Collections map[string]CollectionConfig `yaml:"collections"`
 }
 
 const (
@@ -30,40 +29,39 @@ const (
 // DefaultConfig returns the default configuration.
 func DefaultConfig() *Config {
 	return &Config{
-		DefaultParsers: map[string]string{
-			".md":        "markdown",
-			".markdown":  "markdown",
-			".go":        "chunkx",
-			".py":        "chunkx",
-			".rs":        "chunkx",
-			".js":        "chunkx",
-			".jsx":       "chunkx",
-			".ts":        "chunkx",
-			".tsx":       "chunkx",
-			".html":      "chunkx",
-			".htm":       "chunkx",
-			".css":       "chunkx",
-			".sql":       "chunkx",
-			".yaml":      "chunkx",
-			".yml":       "chunkx",
-			".json":      "chunkx",
-			".java":      "chunkx",
-			".c":         "chunkx",
-			".cpp":       "chunkx",
-			".cc":        "chunkx",
-			".cs":        "chunkx",
-			".php":       "chunkx",
-			".rb":        "chunkx",
-			".sh":        "chunkx",
-			".bash":      "chunkx",
-			"Dockerfile": "chunkx",
-			".proto":     "chunkx",
-			".toml":      "chunkx",
-		},
 		Collections: map[string]CollectionConfig{
 			DefaultCollectionName: {
-				Path:    DefaultCollectionPath,
-				Parsers: nil,
+				Path: DefaultCollectionPath,
+				Parsers: map[string]string{
+					".md":        "markdown",
+					".markdown":  "markdown",
+					".go":        "chunkx",
+					".py":        "chunkx",
+					".rs":        "chunkx",
+					".js":        "chunkx",
+					".jsx":       "chunkx",
+					".ts":        "chunkx",
+					".tsx":       "chunkx",
+					".html":      "chunkx",
+					".htm":       "chunkx",
+					".css":       "chunkx",
+					".sql":       "chunkx",
+					".yaml":      "chunkx",
+					".yml":       "chunkx",
+					".json":      "chunkx",
+					".java":      "chunkx",
+					".c":         "chunkx",
+					".cpp":       "chunkx",
+					".cc":        "chunkx",
+					".cs":        "chunkx",
+					".php":       "chunkx",
+					".rb":        "chunkx",
+					".sh":        "chunkx",
+					".bash":      "chunkx",
+					"Dockerfile": "chunkx",
+					".proto":     "chunkx",
+					".toml":      "chunkx",
+				},
 			},
 		},
 	}

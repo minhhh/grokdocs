@@ -80,10 +80,6 @@ func TestProjectInitializationAndLoading(t *testing.T) {
 	}
 
 	// Load the project config
-	if err := proj.Load(); err != nil {
-		t.Fatalf("proj.Load() failed: %v", err)
-	}
-
 	if proj.Config == nil {
 		t.Fatalf("config was not loaded")
 	}
@@ -96,6 +92,35 @@ func TestProjectInitializationAndLoading(t *testing.T) {
 	if defaultColl.Path != config.DefaultCollectionPath {
 		t.Errorf("expected path '.' for default collection, got %q", defaultColl.Path)
 	}
+}
+
+func TestInitFailsOnInvalidRootPath(t *testing.T) {
+	t.Run("nonexistent path", func(t *testing.T) {
+		proj, err := NewProject(filepath.Join(t.TempDir(), "no-such-dir"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := proj.Init(); err == nil {
+			t.Error("expected Init to fail for nonexistent root")
+		}
+	})
+
+	t.Run("file instead of directory", func(t *testing.T) {
+		badPath := filepath.Join(t.TempDir(), "not-a-dir")
+		if err := os.WriteFile(badPath, []byte("blocker"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		proj, err := NewProject(badPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := proj.Init(); err == nil {
+			t.Error("expected Init to fail when root is a file, not a directory")
+		}
+	})
 }
 
 func TestDatabasesLifecycle(t *testing.T) {
@@ -113,8 +138,6 @@ func TestDatabasesLifecycle(t *testing.T) {
 	if err := proj.Init(); err != nil {
 		t.Fatalf("proj.Init() failed: %v", err)
 	}
-
-	// 1. Open SQLite FTS database
 	fts, err := proj.OpenFTS()
 	if err != nil {
 		t.Fatalf("OpenFTS failed: %v", err)

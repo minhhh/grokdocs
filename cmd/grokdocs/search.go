@@ -32,8 +32,8 @@ var searchCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		if err := proj.Load(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error loading project: %v. Please run 'grokdocs init' first.\n", err)
+		if err := proj.Init(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error initializing project: %v\n", err)
 			os.Exit(1)
 		}
 

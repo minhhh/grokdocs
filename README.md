@@ -27,6 +27,15 @@ go build -tags fts5 ./cmd/grokdocs
 ```
 This produces a `grokdocs` executable in the root directory.
 
+### Running Tests
+```bash
+go test ./...
+```
+Note: Tests requiring SQLite FTS5 (`go test -tags fts5`) will be skipped if your system SQLite build lacks the FTS5 module. Run them explicitly with:
+```bash
+go test -tags fts5 ./...
+```
+
 ### Quick Start
 To view all available commands and flags, run:
 ```bash

@@ -21,6 +21,38 @@ const (
 	DefaultChunkMaxSize = 500
 )
 
+// defaultExcludeList contains patterns for files and directories that are
+// excluded by default when no user-specified exclude list is configured.
+// Patterns are matched against the basename using filepath.Match.
+var defaultExcludeList = []string{
+	// Directories
+	"node_modules",
+	"vendor",
+	"venv",
+	".venv",
+	"env",
+	".env",
+	"__pycache__",
+	"dist",
+	"build",
+	"target",
+	".next",
+	".nuxt",
+	"out",
+	"bin",
+	"obj",
+	"tmp",
+	"temp",
+	"CVS",
+
+	// Files
+	".DS_Store",
+	"Thumbs.db",
+	"package-lock.json",
+	"yarn.lock",
+	"pnpm-lock.yaml",
+}
+
 // SectionHeader represents a parsed Markdown section header.
 type SectionHeader struct {
 	Title      string
@@ -204,19 +236,8 @@ func ResolveParserName(cfg *config.Config, collectionName string, path string) (
 
 	var candidates []matchCandidate
 
-	// Check collection-level overrides
+	// Check collection-level parsers
 	for pattern, parserName := range collCfg.Parsers {
-		if matchesPattern(path, pattern) {
-			candidates = append(candidates, matchCandidate{
-				pattern:    pattern,
-				parserName: parserName,
-				priority:   getMatchPriority(pattern),
-			})
-		}
-	}
-
-	// Check global defaults
-	for pattern, parserName := range cfg.DefaultParsers {
 		if matchesPattern(path, pattern) {
 			candidates = append(candidates, matchCandidate{
 				pattern:    pattern,
@@ -254,7 +275,13 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 
 	util.Logger.Info().Str("name", collectionName).Str("path", cfg.Path).Msg("Synchronizing collection")
 
-	fileFilter := newFileFilter(cfg.Files, cfg.Include, cfg.Exclude)
+	// Use user-specified exclude list if provided, otherwise fall back to defaults
+	excludeList := cfg.Exclude
+	if len(excludeList) == 0 {
+		excludeList = defaultExcludeList
+	}
+
+	fileFilter := newFileFilter(cfg.Files, cfg.Include, excludeList)
 
 	absCollectionPath := filepath.Join(proj.RootPath, cfg.Path)
 	info, err := os.Stat(absCollectionPath)
@@ -279,9 +306,16 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 
 		if d.IsDir() {
 			name := d.Name()
-			// Ignore hidden directories like .git and .grokdocs
+			// Always skip hidden directories like .git and .grokdocs
 			if name != "." && name != ".." && strings.HasPrefix(name, ".") {
 				return filepath.SkipDir
+			}
+			// Skip directories matching the exclude list (glob match on basename)
+			for _, pattern := range excludeList {
+				matched, mErr := filepath.Match(pattern, name)
+				if mErr == nil && matched {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}

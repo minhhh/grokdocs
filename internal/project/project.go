@@ -60,9 +60,18 @@ func FindProject(startDir string) (*Project, error) {
 	}
 }
 
-// Init initializes the `.grokdocs` directory and writes a default `config.yaml` if not present.
+// Init initializes the `.grokdocs` directory, writes a default
+// `config.yaml` if not present, and loads the configuration.
 func (p *Project) Init() error {
-	// Create .grokdocs directory
+	if info, err := os.Stat(p.RootPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("project root %q does not exist", p.RootPath)
+		}
+		return fmt.Errorf("failed to stat project root: %w", err)
+	} else if !info.IsDir() {
+		return fmt.Errorf("project root %q is not a directory", p.RootPath)
+	}
+
 	if err := os.MkdirAll(p.ConfigDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
@@ -75,11 +84,11 @@ func (p *Project) Init() error {
 		}
 	}
 
-	return nil
+	return p.load()
 }
 
-// Load loads and parses the `config.yaml` from the discovered `.grokdocs` directory.
-func (p *Project) Load() error {
+// load loads and parses the `config.yaml` from the `.grokdocs` directory.
+func (p *Project) load() error {
 	configPath := filepath.Join(p.ConfigDir, ConfigFileName)
 	cfg, err := config.LoadFromFile(configPath)
 	if err != nil {

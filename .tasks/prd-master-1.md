@@ -33,9 +33,8 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Current tracker.*
 
-- [x] **PRD-014**: Refactor Configuration with File Selection and Glob Filtering
-- [x] **PRD-015**: Replace slog with rs/zerolog and Add Verbose Mode
 - [ ] **PRD-016**: Add --version CLI Option
+- [/] **PRD-017**: Refactor Project Initialization and Sync
 
 ---
 
@@ -43,57 +42,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Only contains details/checklists for active tasks in Section 2.*
 
-### PRD-014: Refactor Configuration with File Selection and Glob Filtering
 
-- **Objective**: Update the configuration models and synchronization logic to support collection-level file selection and filtering via three fields: `files` (array of exact file names), `include` (array of globs), and `exclude` (array of globs). Support logical rules for merging `files` and `include`, and making `files` and `exclude` mutually exclusive.
-
-- **Checklist**:
-  - [x] Update `CollectionConfig` struct in `internal/config/config.go` to add `files`, `include`, and `exclude` fields.
-  - [x] Add YAML serialization/deserialization tags and defaults.
-  - [x] Refactor the directory walking and ingestion filtering in `internal/ingest` to respect:
-    - If `files` is specified (not empty):
-      - Only ingest files explicitly listed in `files` OR matching any of the glob patterns in `include` (merging `files` and `include`).
-      - Completely ignore `exclude` patterns.
-    - If `files` is empty or not specified:
-      - Scan the folder using `include` patterns (if any) and filter out any files matching `exclude` patterns.
-  - [x] Write unit tests to verify glob filtering, merging of `files` and `include`, and mutual exclusion of `files` and `exclude`.
-  - [x] Combine all SQL queries in `internal/project/fts.go` into a single initialization query for the whole database, bundling all table definitions, FTS5 virtual table, triggers, and indices into one statement.
-
-- **Validation**:
-  - [x] Verify that the codebase compiles cleanly.
-  - [x] Run all tests using `go test -tags fts5 ./...` and ensure they pass.
-
----
-
-### PRD-015: Replace slog with rs/zerolog and Add Verbose Mode
-
-- **Objective**: Replace `log/slog` with `rs/zerolog` for improved performance and structured logging. Add a `--verbose` / `-v` flag to the CLI. In default mode, output is minimal (no timestamps, only INFO+). In verbose mode, output includes timestamps and log level labels, with the threshold set to TRACE.
-
-- **Checklist**:
-  - [x] Add `rs/zerolog` dependency via `go get github.com/rs/zerolog`.
-  - [x] Rewrite `internal/util/logger.go` to use zerolog instead of slog:
-    - Remove `LogFormat` opaque struct pattern; zerolog natively supports `zerolog.ConsoleWriter` for human-readable output and raw JSON for machine output.
-    - Replace `var Logger *slog.Logger` with `var Logger zerolog.Logger`.
-    - `InitLogger` signature changes to accept `io.Writer`, `verbose bool`, and `format LogFormat` (text/json).
-    - In default mode: no timestamp, no level label (except for WARN/ERROR), output starts at INFO.
-    - In verbose mode: include timestamp with milliseconds, print level label (TRACE, DEBUG, INFO, WARN, ERROR, FATAL), threshold set to TRACE.
-  - [x] Add `--verbose` / `-v` global flag to `cmd/grokdocs/root.go`:
-    - When `-v` is set, pass `verbose=true` to `InitLogger`.
-    - Default (`verbose=false`): minimal output, INFO threshold.
-    - Verbose (`verbose=true`): timestamp + level labels, TRACE threshold.
-  - [x] Update all logging call sites from `util.Logger.Info(...)` to `util.Logger.Info().Msg(...)` (zerolog's fluent API).
-  - [x] Rewrite `internal/util/logger_test.go` to test zerolog output:
-    - Test default mode: no timestamp, INFO+ only.
-    - Test verbose mode: timestamp present, TRACE messages shown.
-    - Test JSON format output.
-    - Test level filtering.
-
-- **Validation**:
-  - [x] Verify that the codebase compiles cleanly.
-  - [x] Run all tests using `go test -tags fts5 ./...` and ensure they pass.
-  - [ ] Manually verify CLI output: `grokdocs sync` (default) vs `grokdocs -v sync` (verbose).
-
----
 
 ### PRD-016: Add --version CLI Option
 
@@ -111,12 +60,34 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 ---
 
+### PRD-017: Refactor Project Initialization and Syncing
+
+- **Objective**: Harden the `Project` public API. Remove `Load()` — it's an ambiguous step that sync/search/status should handle internally. The public contract should be: `NewProject` + `Init` to create, then direct sync/search without an extra load call.
+
+- **Checklist**:
+  - [x] Remove `projectRoot` parameter from `Init()`, use `p.ConfigDir` directly
+  - [x] Remove `DefaultParsers` field from `Config` struct and `DefaultConfig()`
+  - [x] Remove public `Load()` method; have `Init()` load config internally (idempotent), and sync/search/status call `Init()` instead of `Load()`
+        - Rename `Load()` to private `load()`
+        - Call `load()` at end of `Init()` so config is always loaded after init
+        - Replace `proj.Load()` with `proj.Init()` in sync.go, search.go, status.go
+        - Replace `proj.Load()` with `proj.Init()` in project_test.go
+  - [x] Add test: `Init()` fails gracefully when `NewProject` is given an invalid root path
+        - Create a regular file at a temp path, call `NewProject` with a subpath of that file, expect `Init()` to return an error (MkdirAll fails because parent is a file, not a directory)
+
+- **Validation**:
+  - [x] `go build ./...` compiles cleanly
+  - [x] `go test ./internal/...` passes (FTS5-dependent tests skipped on systems without fts5 SQLite module — pre-existing)
+
+---
+
 ## 4. Future Roadmap & Backlog
 
 *Placeholders for future tasks.*
 
 - [ ] **PRD-017**: Integrate local ONNX models to convert chunks to vectors on-device
 - [ ] **PRD-018**: Integrate FAISS via `go-faiss` to store vectors and perform similarity searches
+- [ ] **PRD-019**: The files -> parsers mapping should be per collection
 
 ### PRD-017: Integrate local ONNX models to convert chunks to vectors on-device
 
@@ -166,6 +137,8 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 - [x] **PRD-011**: Implement status and status root CLI commands
 - [x] **PRD-012**: Move Util to Internal and Expose Logger Variable
 - [x] **PRD-013**: Refactor InitLogger Parameter to slog.Level
+- [x] **PRD-014**: Refactor Configuration with File Selection and Glob Filtering
+- [x] **PRD-015**: Replace slog with rs/zerolog and Add Verbose Mode
 
 ### PRD-001: Scaffold Go Project Structure
 
@@ -383,4 +356,52 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 - **Validation**:
   - [x] Verify that the codebase compiles cleanly.
   - [x] Run all tests using `go test -tags fts5 ./...` and ensure they pass.
+
+### PRD-014: Refactor Configuration with File Selection and Glob Filtering
+
+- **Objective**: Update the configuration models and synchronization logic to support collection-level file selection and filtering via three fields: `files` (array of exact file names), `include` (array of globs), and `exclude` (array of globs). Support logical rules for merging `files` and `include`, and making `files` and `exclude` mutually exclusive.
+
+- **Checklist**:
+  - [x] Update `CollectionConfig` struct in `internal/config/config.go` to add `files`, `include`, and `exclude` fields.
+  - [x] Add YAML serialization/deserialization tags and defaults.
+  - [x] Refactor the directory walking and ingestion filtering in `internal/ingest` to respect:
+    - If `files` is specified (not empty):
+      - Only ingest files explicitly listed in `files` OR matching any of the glob patterns in `include` (merging `files` and `include`).
+      - Completely ignore `exclude` patterns.
+    - If `files` is empty or not specified:
+      - Scan the folder using `include` patterns (if any) and filter out any files matching `exclude` patterns.
+  - [x] Write unit tests to verify glob filtering, merging of `files` and `include`, and mutual exclusion of `files` and `exclude`.
+  - [x] Combine all SQL queries in `internal/project/fts.go` into a single initialization query for the whole database, bundling all table definitions, FTS5 virtual table, triggers, and indices into one statement.
+
+- **Validation**:
+  - [x] Verify that the codebase compiles cleanly.
+  - [x] Run all tests using `go test -tags fts5 ./...` and ensure they pass.
+
+### PRD-015: Replace slog with rs/zerolog and Add Verbose Mode
+
+- **Objective**: Replace `log/slog` with `rs/zerolog` for improved performance and structured logging. Add a `--verbose` / `-v` flag to the CLI. In default mode, output is minimal (no timestamps, only INFO+). In verbose mode, output includes timestamps and log level labels, with the threshold set to TRACE.
+
+- **Checklist**:
+  - [x] Add `rs/zerolog` dependency via `go get github.com/rs/zerolog`.
+  - [x] Rewrite `internal/util/logger.go` to use zerolog instead of slog:
+    - Remove `LogFormat` opaque struct pattern; zerolog natively supports `zerolog.ConsoleWriter` for human-readable output and raw JSON for machine output.
+    - Replace `var Logger *slog.Logger` with `var Logger zerolog.Logger`.
+    - `InitLogger` signature changes to accept `io.Writer`, `verbose bool`, and `format LogFormat` (text/json).
+    - In default mode: no timestamp, no level label (except for WARN/ERROR), output starts at INFO.
+    - In verbose mode: include timestamp with milliseconds, print level label (TRACE, DEBUG, INFO, WARN, ERROR, FATAL), threshold set to TRACE.
+  - [x] Add `--verbose` / `-v` global flag to `cmd/grokdocs/root.go`:
+    - When `-v` is set, pass `verbose=true` to `InitLogger`.
+    - Default (`verbose=false`): minimal output, INFO threshold.
+    - Verbose (`verbose=true`): timestamp + level labels, TRACE threshold.
+  - [x] Update all logging call sites from `util.Logger.Info(...)` to `util.Logger.Info().Msg(...)` (zerolog's fluent API).
+  - [x] Rewrite `internal/util/logger_test.go` to test zerolog output:
+    - Test default mode: no timestamp, INFO+ only.
+    - Test verbose mode: timestamp present, TRACE messages shown.
+    - Test JSON format output.
+    - Test level filtering.
+
+- **Validation**:
+  - [x] Verify that the codebase compiles cleanly.
+  - [x] Run all tests using `go test -tags fts5 ./...` and ensure they pass.
+  - [ ] Manually verify CLI output: `grokdocs sync` (default) vs `grokdocs -v sync` (verbose).
 

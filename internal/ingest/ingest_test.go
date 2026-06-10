@@ -490,16 +490,14 @@ func TestSyncCollectionWithFileFiltering(t *testing.T) {
 
 func TestParserResolutionAndPrecedence(t *testing.T) {
 	cfg := &config.Config{
-		DefaultParsers: map[string]string{
-			".md":      "markdown",
-			".rfc.md":  "rfc-parser",
-			"*.js":     "javascript-parser",
-		},
 		Collections: map[string]config.CollectionConfig{
 			"default": {
 				Path: ".",
 				Parsers: map[string]string{
 					"hello.md": "hello-parser",
+					".md":      "markdown",
+					".rfc.md":  "rfc-parser",
+					"*.js":     "javascript-parser",
 				},
 			},
 		},
