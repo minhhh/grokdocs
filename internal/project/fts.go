@@ -405,23 +405,33 @@ func (fts *FTSDatabase) SearchFTS(queryText string, collection string, limit int
 
 // DBStats represents index statistics queried from the database.
 type DBStats struct {
-	TotalFiles        int64
-	TotalChunks       int64
-	TotalChars        int64
-	CollectionsCount  int64
-	DocsPerCollection map[string]int64
+	TotalFiles          int64
+	TotalDocuments      int64
+	TotalChunks         int64
+	TotalChars          int64
+	CollectionsCount    int64
+	DocsPerCollection   map[string]int64
+	ChunksPerCollection map[string]int64
 }
 
 // GetStats returns summary statistics from the database.
 func (fts *FTSDatabase) GetStats() (*DBStats, error) {
 	stats := &DBStats{
-		DocsPerCollection: make(map[string]int64),
+		DocsPerCollection:  make(map[string]int64),
+		ChunksPerCollection: make(map[string]int64),
 	}
 
-	// Total files
+	// Total source files indexed (distinct files on disk)
 	err := fts.db.QueryRow("SELECT COUNT(*) FROM files").Scan(&stats.TotalFiles)
 	if err != nil {
 		util.Logger.Error().Err(err).Msg("failed to count files")
+		return nil, err
+	}
+
+	// Total document mappings (one file can appear in multiple collections)
+	err = fts.db.QueryRow("SELECT COUNT(*) FROM documents").Scan(&stats.TotalDocuments)
+	if err != nil {
+		util.Logger.Error().Err(err).Msg("failed to count documents")
 		return nil, err
 	}
 
@@ -458,6 +468,29 @@ func (fts *FTSDatabase) GetStats() (*DBStats, error) {
 		}
 		stats.DocsPerCollection[collection] = count
 		stats.CollectionsCount++
+	}
+	rows.Close()
+
+	// Chunks per collection
+	chunkRows, err := fts.db.Query(`
+		SELECT d.collection, COUNT(*)
+		FROM chunks c
+		JOIN documents d ON c.document_id = d.id
+		GROUP BY d.collection`)
+	if err != nil {
+		util.Logger.Error().Err(err).Msg("failed to query chunks per collection")
+		return nil, err
+	}
+	defer chunkRows.Close()
+
+	for chunkRows.Next() {
+		var collection string
+		var count int64
+		if err := chunkRows.Scan(&collection, &count); err != nil {
+			util.Logger.Error().Err(err).Msg("failed to scan chunks per collection")
+			return nil, err
+		}
+		stats.ChunksPerCollection[collection] = count
 	}
 
 	return stats, nil

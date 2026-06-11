@@ -475,7 +475,7 @@ func TestGetStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStats failed: %v", err)
 	}
-	if stats.TotalFiles != 0 || stats.TotalChunks != 0 || stats.TotalChars != 0 || stats.CollectionsCount != 0 {
+		if stats.TotalDocuments != 0 || stats.TotalFiles != 0 || stats.TotalChunks != 0 || stats.TotalChars != 0 || stats.CollectionsCount != 0 {
 		t.Errorf("expected empty stats, got %+v", stats)
 	}
 
@@ -561,6 +561,9 @@ func TestGetStats(t *testing.T) {
 		t.Fatalf("GetStats failed: %v", err)
 	}
 
+	if stats.TotalDocuments != 2 {
+		t.Errorf("expected 2 documents, got %d", stats.TotalDocuments)
+	}
 	if stats.TotalFiles != 2 {
 		t.Errorf("expected 2 files, got %d", stats.TotalFiles)
 	}
@@ -578,6 +581,12 @@ func TestGetStats(t *testing.T) {
 	}
 	if stats.DocsPerCollection["wiki"] != 1 {
 		t.Errorf("expected 1 doc in 'wiki', got %d", stats.DocsPerCollection["wiki"])
+	}
+	if stats.ChunksPerCollection["notes"] != 1 {
+		t.Errorf("expected 1 chunk in 'notes', got %d", stats.ChunksPerCollection["notes"])
+	}
+	if stats.ChunksPerCollection["wiki"] != 2 {
+		t.Errorf("expected 2 chunks in 'wiki', got %d", stats.ChunksPerCollection["wiki"])
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 )
 
 var statusCmd = &cobra.Command{
-	Use:   "status",
+	Use:   "stats",
 	Short: "Show indexing status and statistics",
 	Long:  `Displays indexed statistics (collections count, documents per collection, total chunks, total chars).`,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -37,20 +37,26 @@ var statusCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		util.Logger.Info().Str("path", proj.RootPath).Msg("Project Root")
-		util.Logger.Info().Str("path", proj.ConfigDir).Msg("Config Directory")
-		util.Logger.Info().Str("path", filepath.Join(proj.ConfigDir, "grokdocs.db")).Msg("Database File")
-		util.Logger.Info().Int64("files", stats.TotalFiles).Int64("chunks", stats.TotalChunks).Int64("chars", stats.TotalChars).Msg("Database Statistics")
+		util.Logger.Info().Msgf("Project root:  %s", proj.RootPath)
+		util.Logger.Info().Msgf("Config dir:    %s", proj.ConfigDir)
+		util.Logger.Info().Msgf("FTS Database:  %s", filepath.Join(proj.ConfigDir, "grokdocs.db"))
+		util.Logger.Info().Msg("")
+		util.Logger.Info().Msgf("Files:         %d", stats.TotalFiles)
+		util.Logger.Info().Msgf("Documents:     %d", stats.TotalDocuments)
+		util.Logger.Info().Msgf("Chunks:        %d", stats.TotalChunks)
+		util.Logger.Info().Msgf("Total chars:   %d", stats.TotalChars)
+		util.Logger.Info().Msg("")
 
+		util.Logger.Info().Msgf("Collections (%d):", stats.CollectionsCount)
 		for name := range proj.Config.Collections {
-			count := stats.DocsPerCollection[name]
-			util.Logger.Info().Str("collection", name).Int64("documents", count).Msg("collection")
+			docs := stats.DocsPerCollection[name]
+			chunks := stats.ChunksPerCollection[name]
+			util.Logger.Info().Msgf("  %s: %d documents, %d chunks", name, docs, chunks)
 		}
-
-		// Show any collections in DB that are no longer in config
-		for name, count := range stats.DocsPerCollection {
+		for name, docs := range stats.DocsPerCollection {
 			if _, ok := proj.Config.Collections[name]; !ok {
-				util.Logger.Warn().Str("collection", name).Int64("documents", count).Msg("collection in database but not in config.yaml")
+				chunks := stats.ChunksPerCollection[name]
+				util.Logger.Warn().Msgf("  %s: %d documents, %d chunks (in database but not in config.yaml)", name, docs, chunks)
 			}
 		}
 	},

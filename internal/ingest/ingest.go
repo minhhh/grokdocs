@@ -299,6 +299,17 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 		}
 	}
 
+	// Remove orphaned documents (file_id points to a file that no longer exists).
+	// This covers cases where SQLite FK cascade didn't fire (e.g. earlier runs
+	// without PRAGMA foreign_keys=ON).
+	if _, err := db.DB().Exec(
+		`DELETE FROM documents WHERE collection = ? AND file_id NOT IN (SELECT id FROM files)`,
+		collectionName,
+	); err != nil {
+		util.Logger.Error().Err(err).Str("collection", collectionName).Msg("failed to cleanup orphaned documents")
+		return SyncResult{}, err
+	}
+
 	// Deduct moved-to files from Added/Modified so each old file maps to
 	// exactly one state.
 	for _, state := range movedToState {
