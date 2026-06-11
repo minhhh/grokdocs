@@ -28,7 +28,24 @@ const (
 // defaultIncludeList contains glob patterns used when a collection has no
 // explicit include or files field. These match common documentation and
 // source file extensions by basename (e.g. *.md matches intro.md in any dir).
-var defaultIncludeList = []string{"*.md", "*.markdown", "*.go", "*.py", "*.rs", "*.ts", "*.js", "*.yaml", "*.yml", "*.toml", "*.json", "*.txt"}
+var defaultIncludeList = []string{
+	"*.md", "*.markdown",
+	"*.bash", "*.c", "*.cc", "*.cjs", "*.cpp", "*.cs", "*.css", "*.cue", "*.cxx",
+	"Dockerfile", "*.dockerfile",
+	"*.elm", "*.ex", "*.exs",
+	"*.go", "*.gradle", "*.groovy",
+	"*.h", "*.hcl", "*.hh", "*.hpp", "*.htm", "*.html", "*.hxx",
+	"*.java", "*.js", "*.jsx",
+	"*.kt", "*.kts",
+	"*.lua",
+	"*.mjs", "*.ml", "*.mli",
+	"*.php", "*.phtml", "*.proto",
+	"*.py", "*.pyi", "*.pyw",
+	"*.rb", "*.rake", "*.gemspec", "*.rs",
+	"*.sc", "*.scala", "*.sh", "*.sql", "*.svelte", "*.swift",
+	"*.tf", "*.toml", "*.ts", "*.tsx",
+	"*.yaml", "*.yml",
+}
 
 // defaultExcludeList contains patterns for files and directories that are
 // excluded by default when no user-specified exclude list is configured.
@@ -379,6 +396,9 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 			continue
 		}
 
+		// Make path project-root-relative for storage and parser resolution
+		relPath := filepath.Join(cfg.Path, r.RelPath)
+
 		sem <- struct{}{}
 		g.Go(func() error {
 			defer func() { <-sem }()
@@ -389,7 +409,7 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 			default:
 			}
 
-			parserName, ok := ResolveParserName(proj.Config, collectionName, r.RelPath)
+			parserName, ok := ResolveParserName(proj.Config, collectionName, relPath)
 			if !ok {
 				return nil
 			}
@@ -398,10 +418,10 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 			}
 
 			seenMu.Lock()
-			seenFiles[r.RelPath] = true
+			seenFiles[relPath] = true
 			seenMu.Unlock()
 
-			return ingestFile(db, r.RelPath, r.AbsPath, collectionName, parserName, proj.Config)
+			return ingestFile(db, relPath, r.AbsPath, collectionName, parserName, proj.Config)
 		})
 	}
 

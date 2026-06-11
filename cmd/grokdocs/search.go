@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/minhhh/grokdocs/internal/project"
+	"github.com/minhhh/grokdocs/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -29,33 +30,33 @@ var searchCmd = &cobra.Command{
 		}
 		proj, err := project.FindProject(startDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			util.Logger.Error().Err(err).Msg("project not found")
 			os.Exit(1)
 		}
 		if err := proj.Init(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error initializing project: %v\n", err)
+			util.Logger.Error().Err(err).Msg("initializing project")
 			os.Exit(1)
 		}
 
 		if searchMode != "fts" && searchMode != "hybrid" && searchMode != "semantics" {
-			fmt.Fprintf(os.Stderr, "Error: invalid search mode %q. Allowed modes are: fts, semantics, hybrid\n", searchMode)
+			util.Logger.Error().Str("mode", searchMode).Msg("invalid search mode")
 			os.Exit(1)
 		}
 
 		if searchMode != "fts" {
-			fmt.Printf("Warning: mode %q is not fully implemented in this phase. Falling back to 'fts' mode.\n", searchMode)
+			util.Logger.Warn().Str("mode", searchMode).Msg("search mode not fully implemented, falling back to fts")
 		}
 
 		db, err := proj.OpenFTS()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
+			util.Logger.Error().Err(err).Msg("opening database")
 			os.Exit(1)
 		}
 		defer proj.Close()
 
 		results, err := db.SearchFTS(query, searchCollection, searchLimit)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Search failed: %v\n", err)
+			util.Logger.Error().Err(err).Msg("search failed")
 			os.Exit(1)
 		}
 

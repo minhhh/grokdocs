@@ -27,6 +27,17 @@ go build -tags fts5 ./cmd/grokdocs
 ```
 This produces a `grokdocs` executable in the root directory.
 
+You can inject a version string at build time via `ldflags`. The version is displayed by `grokdocs --version` (or `grokdocs version`). When not set, it defaults to `dev`:
+```bash
+# Build with a specific version
+go build -tags fts5 -ldflags "-X main.version=1.0.0" -o grokdocs ./cmd/grokdocs
+./grokdocs --version   # prints "grokdocs version 1.0.0"
+
+# Build without ldflags — defaults to "dev"
+go build -tags fts5 -o grokdocs ./cmd/grokdocs
+./grokdocs --version   # prints "grokdocs version dev"
+```
+
 ### Running Tests
 ```bash
 go test ./...

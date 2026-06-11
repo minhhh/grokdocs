@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/minhhh/grokdocs/internal/project"
+	"github.com/minhhh/grokdocs/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -20,21 +20,21 @@ var initCmd = &cobra.Command{
 		}
 		proj, err := project.NewProject(startDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			util.Logger.Error().Err(err).Msg("creating project")
 			os.Exit(1)
 		}
 		configPath := filepath.Join(proj.ConfigDir, project.ConfigFileName)
 		_, alreadyInit := os.Stat(configPath)
 
 		if err := proj.Init(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error initializing project: %v\n", err)
+			util.Logger.Error().Err(err).Msg("initializing project")
 			os.Exit(1)
 		}
 
 		if alreadyInit == nil {
-			fmt.Printf("Project already initialized in %s\n", proj.ConfigDir)
+			util.Logger.Info().Str("dir", proj.ConfigDir).Msg("Project already initialized")
 		} else {
-			fmt.Printf("Initialized empty grokdocs project in %s\n", proj.ConfigDir)
+			util.Logger.Info().Str("dir", proj.ConfigDir).Msg("Initialized empty grokdocs project")
 		}
 	},
 }

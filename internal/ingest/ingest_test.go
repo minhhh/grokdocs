@@ -297,8 +297,9 @@ func TestFileFilterFilesOnly(t *testing.T) {
 		{"docs/README.md", true},
 		{"index.html", true},
 		{"sub/README.md", true},
-		{"docs/intro.md", false},
-		{"style.css", false},
+		{"docs/intro.md", true},  // matches *.md from default include list
+		{"style.css", true},      // matches *.css from default include list
+		{"data.bin", false},      // not in files list and no default include match
 	}
 	for _, tc := range tests {
 		got := f.Match(tc.path)
@@ -449,9 +450,11 @@ func TestFileWalkingDefaultIncludeList(t *testing.T) {
 	}{
 		{"docs/intro.md", true, "# Intro"},
 		{"src/main.go", true, "package main"},
-		{"README.txt", true, "text"},
-		{"styles.css", false, "body {}"},
-		{"index.html", false, "<html>"},
+		{"README.txt", false, "text"},
+		{"styles.css", true, "body {}"},
+		{"index.html", true, "<html>"},
+		{"src/lib.rs", true, "fn main() {}"},
+		{"App.java", true, "class App {}"},
 		{"script.exe", false, "binary"},
 	}
 
@@ -483,7 +486,7 @@ func TestFileWalkingDefaultExcludeList(t *testing.T) {
 	}{
 		{".git/README.md", false, "# git readme"},
 		{"node_modules/pkg/index.js", false, "mod code"},
-		{"dist/output.json", false, `{"key": "val"}`},
+		{"dist/output.yaml", false, "key: val"},
 		{"docs/intro.md", true, "# Intro"},
 		{"src/main.go", true, "package main"},
 	}

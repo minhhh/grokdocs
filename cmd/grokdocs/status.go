@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/minhhh/grokdocs/internal/project"
+	"github.com/minhhh/grokdocs/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -19,30 +21,30 @@ var statusCmd = &cobra.Command{
 		}
 		proj, err := project.FindProject(startDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			util.Logger.Error().Err(err).Msg("project not found")
 			os.Exit(1)
 		}
 		if err := proj.Init(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error initializing project: %v\n", err)
+			util.Logger.Error().Err(err).Msg("initializing project")
 			os.Exit(1)
 		}
 		defer proj.Close()
 
 		db, err := proj.OpenFTS()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
+			util.Logger.Error().Err(err).Msg("opening database")
 			os.Exit(1)
 		}
 
 		stats, err := db.GetStats()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error querying statistics: %v\n", err)
+			util.Logger.Error().Err(err).Msg("querying statistics")
 			os.Exit(1)
 		}
 
 		fmt.Printf("Project Root:      %s\n", proj.RootPath)
 		fmt.Printf("Config Directory:  %s\n", proj.ConfigDir)
-		fmt.Printf("Database File:     %s/grokdocs.db\n", proj.ConfigDir)
+		fmt.Printf("Database File:     %s\n", filepath.Join(proj.ConfigDir, "grokdocs.db"))
 		fmt.Println()
 		fmt.Println("Database Statistics:")
 		fmt.Printf("  Total Files Indexed: %d\n", stats.TotalFiles)
@@ -81,7 +83,7 @@ var statusRootCmd = &cobra.Command{
 		}
 		proj, err := project.FindProject(startDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			util.Logger.Error().Err(err).Msg("project not found")
 			os.Exit(1)
 		}
 		fmt.Println(proj.ConfigDir)

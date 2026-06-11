@@ -33,8 +33,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Current tracker.*
 
-- [ ] **PRD-016**: Add --version CLI Option
-- [x] **PRD-017**: Refactor Project Initialization and Sync
+
 
 ---
 
@@ -44,77 +43,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 
 
-### PRD-016: Add --version CLI Option
-
-- **Objective**: Add a `--version` flag to the root CLI command that prints the application version and exits. Use `ldflags` to inject the version at build time, with a fallback to `dev` when not set.
-
-- **Checklist**:
-  - [ ] Set `Version` field on the root Cobra command to `"dev"` as default.
-  - [ ] Wire a `version` variable via `ldflags` in the Makefile: `-X github.com/minhhh/grokdocs/cmd/grokdocs.version=$(VERSION)`.
-  - [ ] Verify `grokdocs --version` prints the version string.
-  - [ ] Add a `version` subcommand as an alias that also prints the version (standard Cobra convention).
-
-- **Validation**:
-  - [ ] Run `go build -tags fts5 -ldflags "-X github.com/minhhh/grokdocs/cmd/grokdocs.version=1.0.0" -o /tmp/grokdocs ./cmd/grokdocs && /tmp/grokdocs --version` prints `grokdocs version 1.0.0`.
-  - [ ] Run `go build -tags fts5 -o /tmp/grokdocs ./cmd/grokdocs && /tmp/grokdocs --version` prints `grokdocs version dev`.
-
 ---
-
-### PRD-017: Refactor Project Initialization and Syncing
-
-- **Objective**: Harden the `Project` public API. Remove `Load()` — it's an ambiguous step that sync/search/status should handle internally. The public contract should be: `NewProject` + `Init` to create, then direct sync/search without an extra load call.
-
-- **Checklist**:
-  - [x] Remove `projectRoot` parameter from `Init()`, use `p.ConfigDir` directly
-  - [x] Remove `DefaultParsers` field from `Config` struct and `DefaultConfig()`
-  - [x] Remove public `Load()` method; have `Init()` load config internally (idempotent), and sync/search/status call `Init()` instead of `Load()`
-        - Rename `Load()` to private `load()`
-        - Call `load()` at end of `Init()` so config is always loaded after init
-        - Replace `proj.Load()` with `proj.Init()` in sync.go, search.go, status.go
-        - Replace `proj.Load()` with `proj.Init()` in project_test.go
-  - [x] Add test: `Init()` fails gracefully when `NewProject` is given an invalid root path
-        - Create a regular file at a temp path, call `NewProject` with a subpath of that file, expect `Init()` to return an error (MkdirAll fails because parent is a file, not a directory)
-  - [x] Add test: `Init()` is idempotent on an existing project — config and other files remain unchanged
-  - [x] Change CLI log message when re-initializing an existing project: detect if config.yaml already exists in `.grokdocs/` and print "Project already initialized in ..." instead of "Initialized empty grokdocs project ..."
-        - Add a test verifying config.yaml content is preserved on re-init (e.g., read content before and after second Init(), assert identical)
-  - [x] Add a default list of file extensions used when `include` is not specified in a collection
-        - Define a default `include` list (e.g. `*.md`, `*.go`) that applies when a collection has no explicit `include` field
-        - [x] Add comment with examples to the `FileFilter` struct fields (Files, Include, Exclude) explaining behavior and precedence
-  - [x] Fix the test case `TestFileFilterIncludeFolder`: `include` must handle glob patterns like `src/**/*.ts` (tsconfig-style) to match files in subdirectories
-        - [x] Update `fileFilter` to support `**` recursive glob patterns via `matchGlob`/`matchGlobParts`
-        - [x] Add test verifying `include: ["docs/**/*"]` matches `docs/subdir/guide.md` (pre-existing `TestFileFilterIncludeFolder` now passes)
-  - [x] Refactor file scanning into async channel-based pipeline
-        - Create `WalkResult` type (Path + Err) and `WalkFiles(ctx, root) <-chan WalkResult` function that walks a collection root and streams discovered file paths through an **unbuffered channel**
-        - Walk errors (e.g. permission denied on a subdirectory) are pushed into the channel as `WalkResult.Err` — consumer decides how to handle
-        - The `filepath.Walk` terminal error is captured via a separate mechanism or logged
-        - Update `SyncCollection` to use `WalkFiles` instead of inline `filepath.WalkDir`
-        - Replace the serial processing loop with a **semaphore-throttled fan-out**: a buffered channel of tokens limits concurrent file-processing goroutines (e.g. `sem := make(chan struct{}, concurrency)`)
-        - Use `errgroup` to coordinate processing goroutines and capture the first processing error; processing goroutines should respect context cancellation
-        - Keep the existing file-filtering (parser resolution + `fileFilter.Match`) inside each processing goroutine
-  - [x] Add unit test for `WalkFiles`
-        - Test: walk a directory tree, verify the channel emits all expected file paths and closes cleanly
-        - Test: walk a non-existent root returns error via channel
-        - Test: walk with an unreadable subdirectory emits an error into the channel (if possible in test setup)
-        - Test: `WalkFiles` closes channel when walk completes or context is cancelled
-  - [x] Add unit test for semaphore-throttled processing
-        - Create a fake producer channel, attach semaphore-throttled processors via `errgroup`, verify:
-          - All items are processed
-          - Concurrency never exceeds the semaphore limit (track via atomic counter)
-          - A processing error is captured by `errgroup` and remaining items see the cancelled context
-  - [x] Fix directory-skip logic in `walkFiles`: when `files` is set, directories that are prefixes of a `files` entry must NOT be skipped even if they match `excludeList` — e.g. `files: ["a/b/c.d"]` requires descending into `a/` and `a/b/`
-        - Pass `files` list to `walkFiles` alongside `includeList` and `excludeList`
-        - Before skipping a directory via `excludeList`, check if any `files` entry starts with the directory path + "/"; if so, descend into it
-        - Update `SyncCollection` call site to pass `cfg.Files`
-        - Add test: `files: ["subdir/doc.md"]` with `excludeList: ["subdir"]` still discovers the file
-  - [x] Support `**` patterns in exclude list for directory matching in `walkFiles` — e.g. `**/node_modules` should skip `node_modules` at any depth
-        - Use `matchGlob` (which already handles `**`) for directory-exclude matching instead of `filepath.Match` on basename
-        - Update `fileFilter.Match` exclude logic to use `matchGlob` instead of `filepath.Match` on basename, so exclude patterns like `**/node_modules/*.md` work for file filtering too
-  - [x] Add test: exclude overrides include — if a pattern matches both include and exclude lists, the file is excluded
-        - Already implicit in `fileFilter.Match` (exclude runs after include), but add explicit test case for `include: ["*.md"]` + `exclude: ["**/*_old.md"]` verifying `old_file.md` is excluded
-
-- **Validation**:
-  - [x] `go build ./...` compiles cleanly
-  - [x] `go test ./internal/...` passes (FTS5-dependent tests skipped on systems without fts5 SQLite module — pre-existing)
 
 ---
 
@@ -176,7 +105,8 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 - [x] **PRD-013**: Refactor InitLogger Parameter to slog.Level
 - [x] **PRD-014**: Refactor Configuration with File Selection and Glob Filtering
 - [x] **PRD-015**: Replace slog with rs/zerolog and Add Verbose Mode
-
+- [x] **PRD-016**: Add --version CLI Option
+- [x] **PRD-017**: Refactor Project Initialization and Syncing
 ### PRD-001: Scaffold Go Project Structure
 
 - **Objective**: Establish the foundational directory and package structure for `grokdocs` following standard Go layout conventions.
@@ -440,5 +370,75 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 - **Validation**:
   - [x] Verify that the codebase compiles cleanly.
   - [x] Run all tests using `go test -tags fts5 ./...` and ensure they pass.
-  - [ ] Manually verify CLI output: `grokdocs sync` (default) vs `grokdocs -v sync` (verbose).
+   - [ ] Manually verify CLI output: `grokdocs sync` (default) vs `grokdocs -v sync` (verbose).
+
+### PRD-016: Add --version CLI Option
+
+- **Objective**: Add a `--version` flag to the root CLI command that prints the application version and exits. Use `ldflags` to inject the version at build time, with a fallback to `dev` when not set.
+
+- **Checklist**:
+  - [x] Set `Version` field on the root Cobra command to `"dev"` as default.
+  - [x] Verify `grokdocs --version` prints the version string.
+  - [x] Add a `version` subcommand as an alias that also prints the version (standard Cobra convention).
+
+- **Validation**:
+  - [x] Run `go build -tags fts5 -ldflags "-X main.version=1.0.0" -o /tmp/grokdocs ./cmd/grokdocs && /tmp/grokdocs --version` prints `grokdocs version 1.0.0`.
+  - [x] Run `go build -tags fts5 -o /tmp/grokdocs ./cmd/grokdocs && /tmp/grokdocs --version` prints `grokdocs version dev`.
+
+### PRD-017: Refactor Project Initialization and Syncing
+
+- **Objective**: Harden the `Project` public API. Remove `Load()` — it's an ambiguous step that sync/search/status should handle internally. The public contract should be: `NewProject` + `Init` to create, then direct sync/search without an extra load call.
+
+- **Checklist**:
+  - [x] Remove `projectRoot` parameter from `Init()`, use `p.ConfigDir` directly
+  - [x] Remove `DefaultParsers` field from `Config` struct and `DefaultConfig()`
+  - [x] Remove public `Load()` method; have `Init()` load config internally (idempotent), and sync/search/status call `Init()` instead of `Load()`
+        - Rename `Load()` to private `load()`
+        - Call `load()` at end of `Init()` so config is always loaded after init
+        - Replace `proj.Load()` with `proj.Init()` in sync.go, search.go, status.go
+        - Replace `proj.Load()` with `proj.Init()` in project_test.go
+  - [x] Add test: `Init()` fails gracefully when `NewProject` is given an invalid root path
+        - Create a regular file at a temp path, call `NewProject` with a subpath of that file, expect `Init()` to return an error (MkdirAll fails because parent is a file, not a directory)
+  - [x] Add test: `Init()` is idempotent on an existing project — config and other files remain unchanged
+  - [x] Change CLI log message when re-initializing an existing project: detect if config.yaml already exists in `.grokdocs/` and print "Project already initialized in ..." instead of "Initialized empty grokdocs project ..."
+        - Add a test verifying config.yaml content is preserved on re-init (e.g., read content before and after second Init(), assert identical)
+  - [x] Add a default list of file extensions used when `include` is not specified in a collection
+        - Define a default `include` list (e.g. `*.md`, `*.go`) that applies when a collection has no explicit `include` field
+        - [x] Add comment with examples to the `FileFilter` struct fields (Files, Include, Exclude) explaining behavior and precedence
+  - [x] Fix the test case `TestFileFilterIncludeFolder`: `include` must handle glob patterns like `src/**/*.ts` (tsconfig-style) to match files in subdirectories
+        - [x] Update `fileFilter` to support `**` recursive glob patterns via `matchGlob`/`matchGlobParts`
+        - [x] Add test verifying `include: ["docs/**/*"]` matches `docs/subdir/guide.md` (pre-existing `TestFileFilterIncludeFolder` now passes)
+  - [x] Refactor file scanning into async channel-based pipeline
+        - Create `WalkResult` type (Path + Err) and `WalkFiles(ctx, root) <-chan WalkResult` function that walks a collection root and streams discovered file paths through an **unbuffered channel**
+        - Walk errors (e.g. permission denied on a subdirectory) are pushed into the channel as `WalkResult.Err` — consumer decides how to handle
+        - The `filepath.Walk` terminal error is captured via a separate mechanism or logged
+        - Update `SyncCollection` to use `WalkFiles` instead of inline `filepath.WalkDir`
+        - Replace the serial processing loop with a **semaphore-throttled fan-out**: a buffered channel of tokens limits concurrent file-processing goroutines (e.g. `sem := make(chan struct{}, concurrency)`)
+        - Use `errgroup` to coordinate processing goroutines and capture the first processing error; processing goroutines should respect context cancellation
+        - Keep the existing file-filtering (parser resolution + `fileFilter.Match`) inside each processing goroutine
+  - [x] Add unit test for `WalkFiles`
+        - Test: walk a directory tree, verify the channel emits all expected file paths and closes cleanly
+        - Test: walk a non-existent root returns error via channel
+        - Test: walk with an unreadable subdirectory emits an error into the channel (if possible in test setup)
+        - Test: `WalkFiles` closes channel when walk completes or context is cancelled
+  - [x] Add unit test for semaphore-throttled processing
+        - Create a fake producer channel, attach semaphore-throttled processors via `errgroup`, verify:
+          - All items are processed
+          - Concurrency never exceeds the semaphore limit (track via atomic counter)
+          - A processing error is captured by `errgroup` and remaining items see the cancelled context
+  - [x] Fix directory-skip logic in `walkFiles`: when `files` is set, directories that are prefixes of a `files` entry must NOT be skipped even if they match `excludeList` — e.g. `files: ["a/b/c.d"]` requires descending into `a/` and `a/b/`
+        - Pass `files` list to `walkFiles` alongside `includeList` and `excludeList`
+        - Before skipping a directory via `excludeList`, check if any `files` entry starts with the directory path + "/"; if so, descend into it
+        - Update `SyncCollection` call site to pass `cfg.Files`
+        - Add test: `files: ["subdir/doc.md"]` with `excludeList: ["subdir"]` still discovers the file
+  - [x] Support `**` patterns in exclude list for directory matching in `walkFiles` — e.g. `**/node_modules` should skip `node_modules` at any depth
+        - Use `matchGlob` (which already handles `**`) for directory-exclude matching instead of `filepath.Match` on basename
+        - Update `fileFilter.Match` exclude logic to use `matchGlob` instead of `filepath.Match` on basename, so exclude patterns like `**/node_modules/*.md` work for file filtering too
+  - [x] Add test: exclude overrides include — if a pattern matches both include and exclude lists, the file is excluded
+        - Already implicit in `fileFilter.Match` (exclude runs after include), but add explicit test case for `include: ["*.md"]` + `exclude: ["**/*_old.md"]` verifying `old_file.md` is excluded
+
+- **Validation**:
+  - [x] `go build ./...` compiles cleanly
+  - [x] `go test ./internal/...` passes (FTS5-dependent tests skipped on systems without fts5 SQLite module — pre-existing)
+
 

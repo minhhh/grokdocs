@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/minhhh/grokdocs/internal/ingest"
 	"github.com/minhhh/grokdocs/internal/project"
+	"github.com/minhhh/grokdocs/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +21,7 @@ var syncCmd = &cobra.Command{
 	PreRun: func(cmd *cobra.Command, args []string) {
 		// Validate mutual exclusivity
 		if syncAll && syncCollection != "" {
-			fmt.Fprintln(os.Stderr, "Error: --all and --collection flags are mutually exclusive")
+			util.Logger.Error().Msg("--all and --collection flags are mutually exclusive")
 			os.Exit(1)
 		}
 	},
@@ -32,11 +32,11 @@ var syncCmd = &cobra.Command{
 		}
 		proj, err := project.FindProject(startDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			util.Logger.Error().Err(err).Msg("project not found")
 			os.Exit(1)
 		}
 		if err := proj.Init(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error initializing project: %v\n", err)
+			util.Logger.Error().Err(err).Msg("initializing project")
 			os.Exit(1)
 		}
 		defer proj.Close()
@@ -53,13 +53,12 @@ var syncCmd = &cobra.Command{
 		}
 
 		for _, coll := range targets {
-			fmt.Printf("Synchronizing collection %q...\n", coll)
 			if err := ingest.SyncCollection(proj, coll); err != nil {
-				fmt.Fprintf(os.Stderr, "Error synchronizing collection %q: %v\n", coll, err)
+				util.Logger.Error().Err(err).Str("collection", coll).Msg("synchronizing collection")
 				os.Exit(1)
 			}
 		}
-		fmt.Println("Sync completed successfully.")
+		util.Logger.Info().Msg("Sync completed successfully.")
 	},
 }
 
