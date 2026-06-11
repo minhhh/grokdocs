@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -21,52 +20,37 @@ var statusCmd = &cobra.Command{
 		}
 		proj, err := project.FindProject(startDir)
 		if err != nil {
-			util.Logger.Error().Err(err).Msg("project not found")
 			os.Exit(1)
 		}
 		if err := proj.Init(); err != nil {
-			util.Logger.Error().Err(err).Msg("initializing project")
 			os.Exit(1)
 		}
 		defer proj.Close()
 
 		db, err := proj.OpenFTS()
 		if err != nil {
-			util.Logger.Error().Err(err).Msg("opening database")
 			os.Exit(1)
 		}
 
 		stats, err := db.GetStats()
 		if err != nil {
-			util.Logger.Error().Err(err).Msg("querying statistics")
 			os.Exit(1)
 		}
 
-		fmt.Printf("Project Root:      %s\n", proj.RootPath)
-		fmt.Printf("Config Directory:  %s\n", proj.ConfigDir)
-		fmt.Printf("Database File:     %s\n", filepath.Join(proj.ConfigDir, "grokdocs.db"))
-		fmt.Println()
-		fmt.Println("Database Statistics:")
-		fmt.Printf("  Total Files Indexed: %d\n", stats.TotalFiles)
-		fmt.Printf("  Total Chunks:        %d\n", stats.TotalChunks)
-		fmt.Printf("  Total Characters:    %d\n", stats.TotalChars)
-		fmt.Println()
-		fmt.Printf("Collections status (%d configured):\n", len(proj.Config.Collections))
+		util.Logger.Info().Str("path", proj.RootPath).Msg("Project Root")
+		util.Logger.Info().Str("path", proj.ConfigDir).Msg("Config Directory")
+		util.Logger.Info().Str("path", filepath.Join(proj.ConfigDir, "grokdocs.db")).Msg("Database File")
+		util.Logger.Info().Int64("files", stats.TotalFiles).Int64("chunks", stats.TotalChunks).Int64("chars", stats.TotalChars).Msg("Database Statistics")
+
 		for name := range proj.Config.Collections {
 			count := stats.DocsPerCollection[name]
-			fmt.Printf("  - %s: %d documents\n", name, count)
+			util.Logger.Info().Str("collection", name).Int64("documents", count).Msg("collection")
 		}
 
 		// Show any collections in DB that are no longer in config
-		firstExtra := true
 		for name, count := range stats.DocsPerCollection {
 			if _, ok := proj.Config.Collections[name]; !ok {
-				if firstExtra {
-					fmt.Println()
-					fmt.Println("Other collections in database (not in config.yaml):")
-					firstExtra = false
-				}
-				fmt.Printf("  - %s: %d documents\n", name, count)
+				util.Logger.Warn().Str("collection", name).Int64("documents", count).Msg("collection in database but not in config.yaml")
 			}
 		}
 	},
@@ -83,10 +67,9 @@ var statusRootCmd = &cobra.Command{
 		}
 		proj, err := project.FindProject(startDir)
 		if err != nil {
-			util.Logger.Error().Err(err).Msg("project not found")
 			os.Exit(1)
 		}
-		fmt.Println(proj.ConfigDir)
+		util.Logger.Info().Msg(proj.ConfigDir)
 	},
 }
 

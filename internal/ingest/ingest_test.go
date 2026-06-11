@@ -890,6 +890,77 @@ func TestExcludeDoubleStarPattern(t *testing.T) {
 	}
 }
 
+func TestSyncSkipsUnchangedFile(t *testing.T) {
+	root := t.TempDir()
+
+	docsDir := filepath.Join(root, "docs")
+	if err := os.MkdirAll(docsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".grokdocs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	introPath := filepath.Join(docsDir, "intro.md")
+	introContent := "# Welcome\nContent here."
+	if err := os.WriteFile(introPath, []byte(introContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	proj, err := project.NewProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj.Config = &config.Config{
+		Collections: map[string]config.CollectionConfig{
+			"default": {
+				Path:    "docs",
+				Parsers: map[string]string{".md": "markdown"},
+			},
+		},
+	}
+
+	db, err := proj.OpenFTS()
+	if err != nil {
+		t.Fatalf("OpenFTS failed: %v", err)
+	}
+	defer db.Close()
+
+	// First sync — ingests the file
+	if err := SyncCollection(proj, "default"); err != nil {
+		t.Fatalf("first SyncCollection failed: %v", err)
+	}
+
+	fileBefore, err := db.GetFile("docs/intro.md")
+	if err != nil {
+		t.Fatalf("expected file after first sync: %v", err)
+	}
+
+	// Second sync — mtime matches, should hit mtime-skip branch
+	if err := SyncCollection(proj, "default"); err != nil {
+		t.Fatalf("second SyncCollection failed: %v", err)
+	}
+
+	fileAfter, err := db.GetFile("docs/intro.md")
+	if err != nil {
+		t.Fatalf("expected file after second sync: %v", err)
+	}
+
+	// mtime must be unchanged (skip path doesn't touch the record)
+	if fileBefore.ModifiedAt != fileAfter.ModifiedAt {
+		t.Errorf("mtime changed after skip-sync: before=%d after=%d", fileBefore.ModifiedAt, fileAfter.ModifiedAt)
+	}
+
+	// Exactly one file record
+	var count int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM files").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 file record, got %d", count)
+	}
+}
+
 // helpers
 
 func collectWalkResultsWithFilter(t *testing.T, root string, filter *fileFilter) []WalkResult {

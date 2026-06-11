@@ -1,8 +1,9 @@
 package project
 
 import (
-	"fmt"
 	"os"
+
+	"github.com/minhhh/grokdocs/internal/util"
 )
 
 // VectorDatabase encapsulates FAISS index loading, saving, and querying.
@@ -25,7 +26,8 @@ func (v *VectorDatabase) Save() error {
 	// For PRD-004 we touch/create the file to simulate saving.
 	f, err := os.OpenFile(v.IndexPath, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return fmt.Errorf("failed to save vector database index: %w", err)
+		util.Logger.Error().Err(err).Str("path", v.IndexPath).Msg("failed to save vector database index")
+		return err
 	}
 	defer f.Close()
 	return nil

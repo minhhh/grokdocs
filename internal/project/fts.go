@@ -2,8 +2,8 @@ package project
 
 import (
 	"database/sql"
-	"fmt"
 
+	"github.com/minhhh/grokdocs/internal/util"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -112,13 +112,15 @@ type FTSResult struct {
 func OpenFTSDatabase(dbPath string) (*FTSDatabase, error) {
 	db, err := sql.Open(SQLiteDriverName, dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
+		util.Logger.Error().Err(err).Str("path", dbPath).Msg("failed to open sqlite database")
+		return nil, err
 	}
 
 	// Ping to verify the file can be opened/created
 	if err := db.Ping(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to connect to sqlite database: %w", err)
+		util.Logger.Error().Err(err).Str("path", dbPath).Msg("failed to connect to sqlite database")
+		return nil, err
 	}
 
 	return &FTSDatabase{
@@ -143,10 +145,12 @@ func (f *FTSDatabase) DB() *sql.DB {
 // InitSchema initializes database tables, FTS5 virtual table, and triggers.
 func (f *FTSDatabase) InitSchema() error {
 	if _, err := f.db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
-		return fmt.Errorf("failed to enable foreign keys: %w", err)
+		util.Logger.Error().Err(err).Msg("failed to enable foreign keys")
+		return err
 	}
 	if _, err := f.db.Exec(createAllTablesSQL); err != nil {
-		return fmt.Errorf("failed to execute schema: %w\nQuery: %s", err, createAllTablesSQL)
+		util.Logger.Error().Err(err).Str("query", createAllTablesSQL).Msg("failed to execute schema")
+		return err
 	}
 	return nil
 }
@@ -339,7 +343,8 @@ func (f *FTSDatabase) SearchFTS(queryText string, collection string, limit int) 
 
 	rows, err := f.db.Query(sqlQuery, args...)
 	if err != nil {
-		return nil, fmt.Errorf("FTS query failed: %w", err)
+		util.Logger.Error().Err(err).Str("query", sqlQuery).Msg("FTS query failed")
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -384,27 +389,31 @@ func (f *FTSDatabase) GetStats() (*DBStats, error) {
 	// Total files
 	err := f.db.QueryRow("SELECT COUNT(*) FROM files").Scan(&stats.TotalFiles)
 	if err != nil {
-		return nil, fmt.Errorf("failed to count files: %w", err)
+		util.Logger.Error().Err(err).Msg("failed to count files")
+		return nil, err
 	}
 
 	// Total chunks
 	err = f.db.QueryRow("SELECT COUNT(*) FROM chunks").Scan(&stats.TotalChunks)
 	if err != nil {
-		return nil, fmt.Errorf("failed to count chunks: %w", err)
+		util.Logger.Error().Err(err).Msg("failed to count chunks")
+		return nil, err
 	}
 
 	// Total characters (sum of total_chars in chunks)
 	var totalChars sql.NullInt64
 	err = f.db.QueryRow("SELECT SUM(total_chars) FROM chunks").Scan(&totalChars)
 	if err != nil {
-		return nil, fmt.Errorf("failed to sum total chars: %w", err)
+		util.Logger.Error().Err(err).Msg("failed to sum total chars")
+		return nil, err
 	}
 	stats.TotalChars = totalChars.Int64
 
 	// Collections count and documents per collection
 	rows, err := f.db.Query("SELECT collection, COUNT(*) FROM documents GROUP BY collection")
 	if err != nil {
-		return nil, fmt.Errorf("failed to query documents per collection: %w", err)
+		util.Logger.Error().Err(err).Msg("failed to query documents per collection")
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -412,7 +421,8 @@ func (f *FTSDatabase) GetStats() (*DBStats, error) {
 		var collection string
 		var count int64
 		if err := rows.Scan(&collection, &count); err != nil {
-			return nil, fmt.Errorf("failed to scan collection stats: %w", err)
+			util.Logger.Error().Err(err).Msg("failed to scan collection stats")
+			return nil, err
 		}
 		stats.DocsPerCollection[collection] = count
 		stats.CollectionsCount++

@@ -10,10 +10,10 @@ import (
 // CollectionConfig defines configuration for a single ingest collection.
 type CollectionConfig struct {
 	Path    string            `yaml:"path"`
-	Parsers map[string]string `yaml:"parsers"`
-	Files   []string          `yaml:"files"`
-	Include []string          `yaml:"include"`
-	Exclude []string          `yaml:"exclude"`
+	Parsers map[string]string `yaml:"parsers,omitempty"`
+	Files   []string          `yaml:"files,omitempty"`
+	Include []string          `yaml:"include,omitempty"`
+	Exclude []string          `yaml:"exclude,omitempty"`
 }
 
 // Config represents the application configuration.
@@ -32,36 +32,6 @@ func DefaultConfig() *Config {
 		Collections: map[string]CollectionConfig{
 			DefaultCollectionName: {
 				Path: DefaultCollectionPath,
-				Parsers: map[string]string{
-					".md":        "markdown",
-					".markdown":  "markdown",
-					".go":        "chunkx",
-					".py":        "chunkx",
-					".rs":        "chunkx",
-					".js":        "chunkx",
-					".jsx":       "chunkx",
-					".ts":        "chunkx",
-					".tsx":       "chunkx",
-					".html":      "chunkx",
-					".htm":       "chunkx",
-					".css":       "chunkx",
-					".sql":       "chunkx",
-					".yaml":      "chunkx",
-					".yml":       "chunkx",
-					".json":      "chunkx",
-					".java":      "chunkx",
-					".c":         "chunkx",
-					".cpp":       "chunkx",
-					".cc":        "chunkx",
-					".cs":        "chunkx",
-					".php":       "chunkx",
-					".rb":        "chunkx",
-					".sh":        "chunkx",
-					".bash":      "chunkx",
-					"Dockerfile": "chunkx",
-					".proto":     "chunkx",
-					".toml":      "chunkx",
-				},
 			},
 		},
 	}
@@ -74,11 +44,32 @@ func LoadConfig(r io.Reader) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, err
 	}
+	for name, col := range cfg.Collections {
+		if col.Path == "" {
+			col.Path = DefaultCollectionPath
+			cfg.Collections[name] = col
+		}
+	}
 	return &cfg, nil
 }
 
 // SaveConfig writes configuration to a writer.
 func (c *Config) SaveConfig(w io.Writer) error {
+	for name, col := range c.Collections {
+		if len(col.Parsers) == 0 {
+			col.Parsers = nil
+		}
+		if len(col.Files) == 0 {
+			col.Files = nil
+		}
+		if len(col.Include) == 0 {
+			col.Include = nil
+		}
+		if len(col.Exclude) == 0 {
+			col.Exclude = nil
+		}
+		c.Collections[name] = col
+	}
 	enc := yaml.NewEncoder(w)
 	enc.SetIndent(2)
 	return enc.Encode(c)

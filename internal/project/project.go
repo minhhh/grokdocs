@@ -1,11 +1,12 @@
 package project
 
 import (
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 
 	"github.com/minhhh/grokdocs/internal/config"
+	"github.com/minhhh/grokdocs/internal/util"
 )
 
 const (
@@ -28,7 +29,8 @@ type Project struct {
 func NewProject(rootPath string) (*Project, error) {
 	absRoot, err := filepath.Abs(rootPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path for root: %w", err)
+		util.Logger.Error().Err(err).Str("path", rootPath).Msg("failed to get absolute path for root")
+		return nil, err
 	}
 	return &Project{
 		RootPath:  absRoot,
@@ -41,7 +43,8 @@ func NewProject(rootPath string) (*Project, error) {
 func FindProject(startDir string) (*Project, error) {
 	absStart, err := filepath.Abs(startDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve absolute start path: %w", err)
+		util.Logger.Error().Err(err).Str("path", startDir).Msg("failed to resolve absolute start path")
+		return nil, err
 	}
 
 	current := absStart
@@ -65,22 +68,27 @@ func FindProject(startDir string) (*Project, error) {
 func (p *Project) Init() error {
 	if info, err := os.Stat(p.RootPath); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("project root %q does not exist", p.RootPath)
+			util.Logger.Error().Str("path", p.RootPath).Msg("project root does not exist")
+			return err
 		}
-		return fmt.Errorf("failed to stat project root: %w", err)
+		util.Logger.Error().Err(err).Str("path", p.RootPath).Msg("failed to stat project root")
+		return err
 	} else if !info.IsDir() {
-		return fmt.Errorf("project root %q is not a directory", p.RootPath)
+		util.Logger.Error().Str("path", p.RootPath).Msg("project root is not a directory")
+		return errors.New("project root is not a directory")
 	}
 
 	if err := os.MkdirAll(p.ConfigDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
+		util.Logger.Error().Err(err).Str("path", p.ConfigDir).Msg("failed to create config directory")
+		return err
 	}
 
 	configPath := filepath.Join(p.ConfigDir, ConfigFileName)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		cfg := config.DefaultConfig()
 		if err := cfg.SaveToFile(configPath); err != nil {
-			return fmt.Errorf("failed to create default config.yaml: %w", err)
+			util.Logger.Error().Err(err).Str("path", configPath).Msg("failed to create default config.yaml")
+			return err
 		}
 	}
 
@@ -92,7 +100,8 @@ func (p *Project) load() error {
 	configPath := filepath.Join(p.ConfigDir, ConfigFileName)
 	cfg, err := config.LoadFromFile(configPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config.yaml: %w", err)
+		util.Logger.Error().Err(err).Str("path", configPath).Msg("failed to load config.yaml")
+		return err
 	}
 	p.Config = cfg
 	return nil

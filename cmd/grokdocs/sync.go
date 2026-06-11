@@ -32,11 +32,9 @@ var syncCmd = &cobra.Command{
 		}
 		proj, err := project.FindProject(startDir)
 		if err != nil {
-			util.Logger.Error().Err(err).Msg("project not found")
 			os.Exit(1)
 		}
 		if err := proj.Init(); err != nil {
-			util.Logger.Error().Err(err).Msg("initializing project")
 			os.Exit(1)
 		}
 		defer proj.Close()
@@ -54,7 +52,6 @@ var syncCmd = &cobra.Command{
 
 		for _, coll := range targets {
 			if err := ingest.SyncCollection(proj, coll); err != nil {
-				util.Logger.Error().Err(err).Str("collection", coll).Msg("synchronizing collection")
 				os.Exit(1)
 			}
 		}

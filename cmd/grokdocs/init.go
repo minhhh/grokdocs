@@ -20,14 +20,12 @@ var initCmd = &cobra.Command{
 		}
 		proj, err := project.NewProject(startDir)
 		if err != nil {
-			util.Logger.Error().Err(err).Msg("creating project")
 			os.Exit(1)
 		}
 		configPath := filepath.Join(proj.ConfigDir, project.ConfigFileName)
 		_, alreadyInit := os.Stat(configPath)
 
 		if err := proj.Init(); err != nil {
-			util.Logger.Error().Err(err).Msg("initializing project")
 			os.Exit(1)
 		}
 
