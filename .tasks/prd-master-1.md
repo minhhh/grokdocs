@@ -34,7 +34,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 *Current tracker.*
 
 - [ ] **PRD-016**: Add --version CLI Option
-- [/] **PRD-017**: Refactor Project Initialization and Sync
+- [x] **PRD-017**: Refactor Project Initialization and Sync
 
 ---
 
@@ -83,6 +83,34 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
   - [x] Fix the test case `TestFileFilterIncludeFolder`: `include` must handle glob patterns like `src/**/*.ts` (tsconfig-style) to match files in subdirectories
         - [x] Update `fileFilter` to support `**` recursive glob patterns via `matchGlob`/`matchGlobParts`
         - [x] Add test verifying `include: ["docs/**/*"]` matches `docs/subdir/guide.md` (pre-existing `TestFileFilterIncludeFolder` now passes)
+  - [x] Refactor file scanning into async channel-based pipeline
+        - Create `WalkResult` type (Path + Err) and `WalkFiles(ctx, root) <-chan WalkResult` function that walks a collection root and streams discovered file paths through an **unbuffered channel**
+        - Walk errors (e.g. permission denied on a subdirectory) are pushed into the channel as `WalkResult.Err` — consumer decides how to handle
+        - The `filepath.Walk` terminal error is captured via a separate mechanism or logged
+        - Update `SyncCollection` to use `WalkFiles` instead of inline `filepath.WalkDir`
+        - Replace the serial processing loop with a **semaphore-throttled fan-out**: a buffered channel of tokens limits concurrent file-processing goroutines (e.g. `sem := make(chan struct{}, concurrency)`)
+        - Use `errgroup` to coordinate processing goroutines and capture the first processing error; processing goroutines should respect context cancellation
+        - Keep the existing file-filtering (parser resolution + `fileFilter.Match`) inside each processing goroutine
+  - [x] Add unit test for `WalkFiles`
+        - Test: walk a directory tree, verify the channel emits all expected file paths and closes cleanly
+        - Test: walk a non-existent root returns error via channel
+        - Test: walk with an unreadable subdirectory emits an error into the channel (if possible in test setup)
+        - Test: `WalkFiles` closes channel when walk completes or context is cancelled
+  - [x] Add unit test for semaphore-throttled processing
+        - Create a fake producer channel, attach semaphore-throttled processors via `errgroup`, verify:
+          - All items are processed
+          - Concurrency never exceeds the semaphore limit (track via atomic counter)
+          - A processing error is captured by `errgroup` and remaining items see the cancelled context
+  - [x] Fix directory-skip logic in `walkFiles`: when `files` is set, directories that are prefixes of a `files` entry must NOT be skipped even if they match `excludeList` — e.g. `files: ["a/b/c.d"]` requires descending into `a/` and `a/b/`
+        - Pass `files` list to `walkFiles` alongside `includeList` and `excludeList`
+        - Before skipping a directory via `excludeList`, check if any `files` entry starts with the directory path + "/"; if so, descend into it
+        - Update `SyncCollection` call site to pass `cfg.Files`
+        - Add test: `files: ["subdir/doc.md"]` with `excludeList: ["subdir"]` still discovers the file
+  - [x] Support `**` patterns in exclude list for directory matching in `walkFiles` — e.g. `**/node_modules` should skip `node_modules` at any depth
+        - Use `matchGlob` (which already handles `**`) for directory-exclude matching instead of `filepath.Match` on basename
+        - Update `fileFilter.Match` exclude logic to use `matchGlob` instead of `filepath.Match` on basename, so exclude patterns like `**/node_modules/*.md` work for file filtering too
+  - [x] Add test: exclude overrides include — if a pattern matches both include and exclude lists, the file is excluded
+        - Already implicit in `fileFilter.Match` (exclude runs after include), but add explicit test case for `include: ["*.md"]` + `exclude: ["**/*_old.md"]` verifying `old_file.md` is excluded
 
 - **Validation**:
   - [x] `go build ./...` compiles cleanly

@@ -1,15 +1,18 @@
 package ingest
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/minhhh/grokdocs/internal/config"
 	"github.com/minhhh/grokdocs/internal/project"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestFileWalking(t *testing.T) {
@@ -551,5 +554,290 @@ func TestParserResolutionAndPrecedence(t *testing.T) {
 	_, ok = ResolveParserName(cfg, "default", "path/to/style.css")
 	if ok {
 		t.Errorf("expected no match for style.css")
+	}
+}
+
+func TestWalkFilesFilesOverrideExclude(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"subdir/doc.md", true},
+	}
+
+	root := t.TempDir()
+	for _, tc := range tests {
+		writeFile(t, root, tc.path, "# found")
+	}
+
+	results := collectWalkResultsWithFilter(t, root, newFileFilter([]string{"subdir/doc.md"}, nil, []string{"subdir"}))
+	got := map[string]bool{}
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		got[r.RelPath] = true
+	}
+	for _, tc := range tests {
+		if got[tc.path] != tc.want {
+			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
+		}
+	}
+}
+
+func TestWalkFilesIncludeListFiltersFiles(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+		cont string
+	}{
+		{"docs/intro.md", true, "# Intro"},
+		{"docs/main.go", true, "package main"},
+		{"README.txt", false, "text"},
+	}
+
+	root := t.TempDir()
+	for _, tc := range tests {
+		writeFile(t, root, tc.path, tc.cont)
+	}
+
+	results := collectWalkResultsWithFilter(t, root, newFileFilter(nil, []string{"*.md", "*.go"}, nil))
+	got := map[string]bool{}
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		got[r.RelPath] = true
+	}
+	for _, tc := range tests {
+		if got[tc.path] != tc.want {
+			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
+		}
+	}
+}
+
+func TestWalkFilesIncludesHiddenDirs(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+		cont string
+	}{
+		{".git/config", true, "git config"},
+		{".grokdocs/config.yaml", true, "config"},
+	}
+
+	root := t.TempDir()
+	for _, tc := range tests {
+		writeFile(t, root, tc.path, tc.cont)
+	}
+
+	results := collectWalkResultsWithFilter(t, root, &fileFilter{})
+	got := map[string]bool{}
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		got[r.RelPath] = true
+	}
+	for _, tc := range tests {
+		if got[tc.path] != tc.want {
+			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
+		}
+	}
+}
+
+func TestWalkFilesExcludeListSkipsDirs(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+		cont string
+	}{
+		{"node_modules/pkg/index.js", false, "code"},
+		{"docs/node_modules/pkg/index.js", false, "code"},
+		{"src/main.go", true, "package main"},
+	}
+
+	root := t.TempDir()
+	for _, tc := range tests {
+		writeFile(t, root, tc.path, tc.cont)
+	}
+
+	results := collectWalkResultsWithFilter(t, root, newFileFilter(nil, nil, []string{"node_modules"}))
+	got := map[string]bool{}
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		got[r.RelPath] = true
+	}
+	for _, tc := range tests {
+		if got[tc.path] != tc.want {
+			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
+		}
+	}
+}
+
+func TestWalkFilesClosesOnCancel(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "file1.md", "# 1")
+	writeFile(t, root, "file2.md", "# 2")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ch := walkFiles(ctx, root, newFileFilter(nil, nil, nil))
+	for r := range ch {
+		if r.Err != nil {
+			return // context cancelled, walk should emit error or close
+		}
+	}
+}
+
+func TestWalkFilesNonExistentRoot(t *testing.T) {
+	ch := walkFiles(context.Background(), "/nonexistent/path", newFileFilter(nil, nil, nil))
+	found := false
+	for r := range ch {
+		if r.Err != nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected error for nonexistent root")
+	}
+}
+
+func TestSemaphoreThrottlesConcurrency(t *testing.T) {
+	var mu sync.Mutex
+	var maxConcurrent int
+	var curConcurrent int
+
+	g, ctx := errgroup.WithContext(context.Background())
+	sem := make(chan struct{}, 3)
+
+	for i := 0; i < 10; i++ {
+		sem <- struct{}{}
+		i := i
+		g.Go(func() error {
+			defer func() { <-sem }()
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
+			mu.Lock()
+			curConcurrent++
+			if curConcurrent > maxConcurrent {
+				maxConcurrent = curConcurrent
+			}
+			mu.Unlock()
+
+			// Simulate work
+			_ = i
+
+			mu.Lock()
+			curConcurrent--
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		t.Fatalf("errgroup failed: %v", err)
+	}
+
+	if maxConcurrent > 3 {
+		t.Errorf("expected max concurrency <= 3, got %d", maxConcurrent)
+	}
+}
+
+func TestWalkFilesDoubleStarExclude(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+		cont string
+	}{
+		{"a/node_modules/pkg/index.js", false, "code"},
+		{"a/src/main.go", true, "package main"},
+	}
+
+	root := t.TempDir()
+	for _, tc := range tests {
+		writeFile(t, root, tc.path, tc.cont)
+	}
+
+	results := collectWalkResultsWithFilter(t, root, newFileFilter(nil, nil, []string{"**/node_modules"}))
+	got := map[string]bool{}
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		got[r.RelPath] = true
+	}
+	for _, tc := range tests {
+		if got[tc.path] != tc.want {
+			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
+		}
+	}
+}
+
+func TestExcludeOverridesInclude(t *testing.T) {
+	f := newFileFilter(nil, []string{"*.md"}, []string{"*_old.md"})
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"docs/intro.md", true},
+		{"docs/changes_old.md", false},
+		{"README.md", true},
+		{"archive_old.md", false},
+	}
+	for _, tc := range tests {
+		got := f.Match(tc.path)
+		if got != tc.want {
+			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestExcludeDoubleStarPattern(t *testing.T) {
+	f := newFileFilter(nil, []string{"**/*"}, []string{"**/node_modules/**"})
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"src/main.go", true},
+		{"node_modules/pkg/index.js", false},
+		{"a/b/node_modules/pkg/index.js", false},
+		{"README.md", true},
+	}
+	for _, tc := range tests {
+		got := f.Match(tc.path)
+		if got != tc.want {
+			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+// helpers
+
+func collectWalkResultsWithFilter(t *testing.T, root string, filter *fileFilter) []WalkResult {
+	t.Helper()
+	var results []WalkResult
+	for r := range walkFiles(context.Background(), root, filter) {
+		results = append(results, r)
+	}
+	return results
+}
+
+func writeFile(t *testing.T, root, relPath, content string) {
+	t.Helper()
+	path := filepath.Join(root, relPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -16,5 +16,6 @@ require (
 	github.com/rs/zerolog v1.35.1 // indirect
 	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
+	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.29.0 // indirect
 )

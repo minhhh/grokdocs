@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
@@ -9,16 +10,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/gomantics/chunkx"
 	"github.com/gomantics/chunkx/languages"
 	"github.com/minhhh/grokdocs/internal/config"
 	"github.com/minhhh/grokdocs/internal/project"
 	"github.com/minhhh/grokdocs/internal/util"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
-	DefaultChunkMaxSize = 500
+	DefaultChunkMaxSize  = 500
+	DefaultConcurrency   = 4
 )
 
 // defaultIncludeList contains glob patterns used when a collection has no
@@ -31,6 +35,8 @@ var defaultIncludeList = []string{"*.md", "*.markdown", "*.go", "*.py", "*.rs", 
 // Patterns are matched against the basename using filepath.Match.
 var defaultExcludeList = []string{
 	// Directories
+	".git",
+	".grokdocs",
 	"node_modules",
 	"vendor",
 	"venv",
@@ -56,6 +62,71 @@ var defaultExcludeList = []string{
 	"package-lock.json",
 	"yarn.lock",
 	"pnpm-lock.yaml",
+}
+
+// WalkResult is a single item from walkFiles: either a file path or a walk error.
+type WalkResult struct {
+	AbsPath string // absolute path on disk (for reading the file)
+	RelPath string // project-root-relative path (for matching/DB)
+	Err     error
+}
+
+// walkFiles walks collectionRoot and streams discovered files through an
+// unbuffered channel. Files are emitted only if they pass filter.Match
+// (using projectRoot-relative paths). Directory skipping uses filter.exclude
+// (with ** support); a directory is descended into regardless if any entry
+// in filter.files is rooted inside it. Walk callback errors (e.g. permission
+// denied) are sent as WalkResult.Err. The channel is closed when the walk
+// completes or the context is cancelled.
+func walkFiles(ctx context.Context, collectionRoot string, filter *fileFilter) <-chan WalkResult {
+	ch := make(chan WalkResult)
+	go func() {
+		defer close(ch)
+		filepath.Walk(collectionRoot, func(absPath string, info os.FileInfo, err error) error {
+			if err != nil {
+				select {
+				case ch <- WalkResult{Err: fmt.Errorf("walk error at %s: %w", absPath, err)}:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				return nil
+			}
+
+
+			rel, _ := filepath.Rel(collectionRoot, absPath)
+
+			if info.IsDir() {
+				prefix := rel
+				if prefix != "." {
+					prefix += "/"
+				}
+				for _, f := range filter.files {
+					if strings.HasPrefix(f, prefix) {
+						return nil
+					}
+				}
+
+				for _, pattern := range filter.exclude {
+					if matchGlob(rel, pattern) {
+						return filepath.SkipDir
+					}
+				}
+				return nil
+			}
+
+			if !filter.Match(rel) {
+				return nil
+			}
+
+			select {
+			case ch <- WalkResult{AbsPath: absPath, RelPath: rel}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return nil
+		})
+	}()
+	return ch
 }
 
 // SectionHeader represents a parsed Markdown section header.
@@ -280,18 +351,7 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 
 	util.Logger.Info().Str("name", collectionName).Str("path", cfg.Path).Msg("Synchronizing collection")
 
-	// Use user-specified exclude list if provided, otherwise fall back to defaults
-	excludeList := cfg.Exclude
-	if len(excludeList) == 0 {
-		excludeList = defaultExcludeList
-	}
-
-	includeList := cfg.Include
-	if len(cfg.Files) == 0 && len(includeList) == 0 {
-		includeList = defaultIncludeList
-	}
-
-	fileFilter := newFileFilter(cfg.Files, includeList, excludeList)
+	fileFilter := newFileFilter(cfg.Files, cfg.Include, cfg.Exclude)
 
 	absCollectionPath := filepath.Join(proj.RootPath, cfg.Path)
 	info, err := os.Stat(absCollectionPath)
@@ -307,52 +367,45 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 
+	var seenMu sync.Mutex
 	seenFiles := make(map[string]bool)
 
-	err = filepath.WalkDir(absCollectionPath, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	g, ctx := errgroup.WithContext(context.Background())
+	sem := make(chan struct{}, DefaultConcurrency)
+
+	for r := range walkFiles(ctx, absCollectionPath, fileFilter) {
+		if r.Err != nil {
+			util.Logger.Warn().Err(r.Err).Msg("walk error")
+			continue
 		}
 
-		if d.IsDir() {
-			name := d.Name()
-			// Always skip hidden directories like .git and .grokdocs
-			if name != "." && name != ".." && strings.HasPrefix(name, ".") {
-				return filepath.SkipDir
+		sem <- struct{}{}
+		g.Go(func() error {
+			defer func() { <-sem }()
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
 			}
-			// Skip directories matching the exclude list (glob match on basename)
-			for _, pattern := range excludeList {
-				matched, mErr := filepath.Match(pattern, name)
-				if mErr == nil && matched {
-					return filepath.SkipDir
-				}
+
+			parserName, ok := ResolveParserName(proj.Config, collectionName, r.RelPath)
+			if !ok {
+				return nil
 			}
-			return nil
-		}
-
-		parserName, ok := ResolveParserName(proj.Config, collectionName, path)
-		if ok {
-			if _, registered := GetParser(parserName); registered {
-				relPath, err := filepath.Rel(proj.RootPath, path)
-				if err != nil {
-					return fmt.Errorf("failed to get relative path for %s: %w", path, err)
-				}
-
-				if !fileFilter.Match(relPath) {
-					return nil
-				}
-				seenFiles[relPath] = true
-
-				if err := ingestFile(db, relPath, path, collectionName, parserName, proj.Config); err != nil {
-					return err
-				}
+			if _, registered := GetParser(parserName); !registered {
+				return nil
 			}
-		}
 
-		return nil
-	})
+			seenMu.Lock()
+			seenFiles[r.RelPath] = true
+			seenMu.Unlock()
 
-	if err != nil {
+			return ingestFile(db, r.RelPath, r.AbsPath, collectionName, parserName, proj.Config)
+		})
+	}
+
+	if err := g.Wait(); err != nil {
 		return err
 	}
 
@@ -381,7 +434,10 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 	}
 
 	for _, fi := range dbFiles {
-		if !seenFiles[fi.path] {
+		seenMu.Lock()
+		_, ok := seenFiles[fi.path]
+		seenMu.Unlock()
+		if !ok {
 			if err := db.DeleteFile(fi.id); err != nil {
 				return fmt.Errorf("failed to delete file record %s: %w", fi.path, err)
 			}
@@ -506,13 +562,14 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 // fileFilter applies files/include/exclude rules from a collection config.
 //
 // Field precedence:
-//   - files:  explicit filenames (basename match). When set, exclude is ignored.
-//             Example: ["README.md", "index.md"]
+//   - files:  explicit filenames or relative paths (basename or full-path match).
+//             When set, exclude is ignored.
+//             Example: ["README.md", "subdir/doc.md"]
 //   - include: glob patterns, matched against basename or full path (supports **).
 //             Example: ["*.md", "docs/**/*.go"] — matches any .md (any dir),
 //             or any .go under docs/ recursively
-//   - exclude: glob patterns matched against basename.
-//             Example: ["*_test.go", "*.txt"]
+//   - exclude: glob patterns matched against path or basename (supports **).
+//             Example: ["*_test.go", "**/node_modules/*"]
 //
 // When files is set, a path passes if its basename matches any entry in files
 // OR if include matches. When files is not set, include acts as a whitelist
@@ -524,6 +581,12 @@ type fileFilter struct {
 }
 
 func newFileFilter(files, include, exclude []string) *fileFilter {
+	if len(exclude) == 0 {
+		exclude = defaultExcludeList
+	}
+	if len(include) == 0 {
+		include = defaultIncludeList
+	}
 	return &fileFilter{files: files, include: include, exclude: exclude}
 }
 
@@ -532,7 +595,7 @@ func (f *fileFilter) Match(path string) bool {
 	if len(f.files) > 0 {
 		base := filepath.Base(path)
 		for _, name := range f.files {
-			if base == name {
+			if path == name || base == name {
 				return true
 			}
 		}
@@ -558,69 +621,14 @@ func (f *fileFilter) Match(path string) bool {
 		}
 	}
 
-	// Apply exclude (always matched against basename)
-	base := filepath.Base(path)
+	// Apply exclude (supports ** via matchGlob)
 	for _, pattern := range f.exclude {
-		matched, err := filepath.Match(pattern, base)
-		if err == nil && matched {
+		if matchGlob(path, pattern) {
 			return false
 		}
 	}
 
 	return true
-}
-
-// matchGlob reports whether path matches pattern, supporting ** for recursive
-// directory matching (tsconfig-style). Without ** it falls back to basename
-// matching for backward compatibility.
-func matchGlob(path, pattern string) bool {
-	if !strings.Contains(pattern, "**") {
-		if strings.Contains(pattern, "/") {
-			matched, err := filepath.Match(pattern, path)
-			return err == nil && matched
-		}
-		base := filepath.Base(path)
-		matched, err := filepath.Match(pattern, base)
-		return err == nil && matched
-	}
-
-	path = filepath.ToSlash(path)
-	pattern = filepath.ToSlash(pattern)
-
-	patParts := strings.Split(pattern, "/")
-	pathParts := strings.Split(path, "/")
-	return matchGlobParts(pathParts, patParts)
-}
-
-func matchGlobParts(pathParts, patParts []string) bool {
-	if len(patParts) == 0 {
-		return len(pathParts) == 0
-	}
-
-	if len(pathParts) == 0 {
-		return allDoubleStar(patParts)
-	}
-
-	p := patParts[0]
-
-	if p == "**" {
-		for i := 0; i <= len(pathParts); i++ {
-			if matchGlobParts(pathParts[i:], patParts[1:]) {
-				return true
-			}
-		}
-		return false
-	}
-
-	matched, err := filepath.Match(p, pathParts[0])
-	if err != nil || !matched {
-		return false
-	}
-	return matchGlobParts(pathParts[1:], patParts[1:])
-}
-
-func allDoubleStar(parts []string) bool {
-	return len(parts) == 0 || (parts[0] == "**" && allDoubleStar(parts[1:]))
 }
 
 func computeSHA256(filePath string) (string, error) {
