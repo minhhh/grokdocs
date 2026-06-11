@@ -12,8 +12,6 @@ import (
 	"github.com/minhhh/grokdocs/internal/project"
 )
 
-const DefaultChunkMaxSize = 500
-
 // ChunkxParser wraps the gomantics/chunkx AST-based library.
 type ChunkxParser struct {
 	DefaultLanguage languages.LanguageName

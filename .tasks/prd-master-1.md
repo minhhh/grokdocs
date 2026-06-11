@@ -41,9 +41,11 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Only contains details/checklists for active tasks in Section 2.*
 
+- **Validation**:
+  - Run sync with `-v` on a directory with mixed file states: new files, modified files, moved files, deleted files. Verify progress ticks are printed and final summary counts match expectations.
+  - Unit test verifying `SyncResult` counts are correct after a controlled sequence of changes.
 
 
----
 
 ---
 
@@ -53,7 +55,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 - [ ] **PRD-017**: Integrate local ONNX models to convert chunks to vectors on-device
 - [ ] **PRD-018**: Integrate FAISS via `go-faiss` to store vectors and perform similarity searches
-- [ ] **PRD-019**: The files -> parsers mapping should be per collection
+- [ ] **PRD-xxx**: Check the ingest check for prefix with prefix += "/" whether it will work cross platform
 
 ### PRD-017: Integrate local ONNX models to convert chunks to vectors on-device
 
@@ -107,6 +109,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 - [x] **PRD-015**: Replace slog with rs/zerolog and Add Verbose Mode
 - [x] **PRD-016**: Add --version CLI Option
 - [x] **PRD-017**: Refactor Project Initialization and Syncing
+- [x] **PRD-019**: Improve SyncCollection with progress reporting and detailed sync results
 ### PRD-001: Scaffold Go Project Structure
 
 - **Objective**: Establish the foundational directory and package structure for `grokdocs` following standard Go layout conventions.
@@ -441,4 +444,18 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
   - [x] `go build ./...` compiles cleanly
   - [x] `go test ./internal/...` passes (FTS5-dependent tests skipped on systems without fts5 SQLite module — pre-existing)
 
+### PRD-019: Improve SyncCollection with progress reporting and detailed sync results
+
+- **Objective**: Enhance `SyncCollection` in `internal/ingest` to report real-time progress (number of files processed) through a channel, and emit a final sync summary containing counts of unchanged, modified, moved, and deleted files.
+
+- **Checklist**:
+  - [x] Add `github.com/schollz/progressbar/v3` dependency
+  - [x] Define a `SyncProgress` struct with fields: `FilesProcessed int`, `Phase string`
+  - [x] Define a `SyncResult` struct with fields: `Unchanged int`, `Modified int`, `Moved int`, `Deleted int`
+  - [x] Refactor `SyncCollection` signature to accept an optional `progress chan<- SyncProgress` parameter and return a `SyncResult` value
+  - [x] Send progress updates on the channel as each file is processed (before/after chunking)
+  - [x] Track file states during sync: compare content_hash and file_path to detect unchanged, modified, moved, and deleted files
+  - [x] Populate and return the final `SyncResult` after all files are processed
+  - [x] Update the CLI `sync` command to display real-time progress output (e.g. `"Processed 5 files..."`) when verbose (`-v`) is set, using `schollz/progressbar/v3`
+  - [x] Print the final sync result summary (e.g. `"Sync complete: 30 unchanged, 8 modified, 3 moved, 1 deleted"`) at the end of sync
 

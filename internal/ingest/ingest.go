@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/minhhh/grokdocs/internal/config"
 	"github.com/minhhh/grokdocs/internal/parser"
@@ -86,6 +87,30 @@ type WalkResult struct {
 	Err     error
 }
 
+// FileState indicates whether a file was unchanged, added as new, or modified.
+type FileState int
+
+const (
+	FileUnchanged FileState = iota
+	FileAdded
+	FileModified
+)
+
+// SyncProgress is sent on the progress channel during SyncCollection.
+type SyncProgress struct {
+	FilesProcessed int
+	Phase          string
+}
+
+// SyncResult contains the final tallies from a SyncCollection run.
+type SyncResult struct {
+	Unchanged int
+	Added     int
+	Modified  int
+	Moved     int
+	Deleted   int
+}
+
 // walkFiles walks collectionRoot and streams discovered files through an
 // unbuffered channel. Files are emitted only if they pass filter.Match
 // (using projectRoot-relative paths). Directory skipping uses filter.exclude
@@ -144,11 +169,11 @@ func walkFiles(ctx context.Context, collectionRoot string, filter *fileFilter) <
 	return ch
 }
 
-func SyncCollection(proj *project.Project, collectionName string) error {
+func SyncCollection(proj *project.Project, collectionName string, progress chan<- SyncProgress) (SyncResult, error) {
 	cfg, ok := proj.Config.Collections[collectionName]
 	if !ok {
 		util.Logger.Error().Str("collection", collectionName).Msg("collection not found in config")
-		return errors.New("collection not found")
+		return SyncResult{}, errors.New("collection not found")
 	}
 
 	util.Logger.Info().Str("name", collectionName).Str("path", cfg.Path).Msg("Synchronizing collection")
@@ -159,21 +184,28 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 	info, err := os.Stat(absCollectionPath)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", absCollectionPath).Msg("collection path error")
-		return err
+		return SyncResult{}, err
 	}
 	if !info.IsDir() {
 		util.Logger.Error().Str("path", absCollectionPath).Msg("collection path is not a directory")
-		return errors.New("collection path is not a directory")
+		return SyncResult{}, errors.New("collection path is not a directory")
 	}
 
 	db, err := proj.OpenFTS()
 	if err != nil {
 		util.Logger.Error().Err(err).Msg("failed to open database")
-		return err
+		return SyncResult{}, err
 	}
 
-	var seenMu sync.Mutex
-	seenFiles := make(map[string]bool)
+	var (
+		seenMu           sync.Mutex
+		seenFiles        = make(map[string]bool)
+		result           SyncResult
+		resultMu         sync.Mutex
+		newFileHashes    = make(map[string]FileState) // hash → state of newly ingested files
+		movedToState     = make(map[string]FileState) // hash → state of moved-to destination
+		processedCount   int32
+	)
 
 	g, ctx := errgroup.WithContext(context.Background())
 	sem := make(chan struct{}, DefaultConcurrency)
@@ -198,9 +230,11 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 
 			parserName, ok := parser.ResolveParserName(proj.Config, collectionName, relPath)
 			if !ok {
+				util.Logger.Warn().Str("path", relPath).Msg("no parser matched for file, skipping")
 				return nil
 			}
 			if _, registered := parser.GetParser(parserName); !registered {
+				util.Logger.Warn().Str("path", relPath).Str("parser", parserName).Msg("parser not registered, skipping")
 				return nil
 			}
 
@@ -208,36 +242,61 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 			seenFiles[relPath] = true
 			seenMu.Unlock()
 
-			return ingestFile(db, relPath, r.AbsPath, collectionName, parserName, proj.Config)
+			state, hash, err := ingestFile(db, relPath, r.AbsPath, collectionName, parserName, proj.Config)
+			if err != nil {
+				return err
+			}
+
+			resultMu.Lock()
+			switch state {
+			case FileUnchanged:
+				result.Unchanged++
+			case FileAdded:
+				result.Added++
+				newFileHashes[hash] = FileAdded
+			case FileModified:
+				result.Modified++
+				newFileHashes[hash] = FileModified
+			}
+			resultMu.Unlock()
+
+			if progress != nil {
+				count := atomic.AddInt32(&processedCount, 1)
+				progress <- SyncProgress{FilesProcessed: int(count), Phase: "Processing"}
+			}
+
+			return nil
 		})
 	}
 
 	if err := g.Wait(); err != nil {
-		return err
+		return SyncResult{}, err
 	}
 
-	// Cleanup files in database that are no longer on disk for this collection
+	// Cleanup files in database that are no longer on disk for this collection.
+	// Detect moved vs deleted by comparing content hashes.
 	rows, err := db.DB().Query(`
-		SELECT f.id, f.file_path 
-		FROM files f 
-		JOIN documents d ON f.id = d.file_id 
+		SELECT f.id, f.file_path, f.content_hash
+		FROM files f
+		JOIN documents d ON f.id = d.file_id
 		WHERE d.collection = ?`, collectionName)
 	if err != nil {
 		util.Logger.Error().Err(err).Msg("failed to query collection files for cleanup")
-		return err
+		return SyncResult{}, err
 	}
 	defer rows.Close()
 
 	type fileInfo struct {
 		id   int64
 		path string
+		hash string
 	}
 	var dbFiles []fileInfo
 	for rows.Next() {
 		var fi fileInfo
-		if err := rows.Scan(&fi.id, &fi.path); err != nil {
+		if err := rows.Scan(&fi.id, &fi.path, &fi.hash); err != nil {
 			util.Logger.Error().Err(err).Msg("failed to scan file row")
-			return err
+			return SyncResult{}, err
 		}
 		dbFiles = append(dbFiles, fi)
 	}
@@ -247,21 +306,41 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 		_, ok := seenFiles[fi.path]
 		seenMu.Unlock()
 		if !ok {
+			resultMu.Lock()
+			if destState, isMoved := newFileHashes[fi.hash]; isMoved {
+				result.Moved++
+				movedToState[fi.hash] = destState
+			} else {
+				result.Deleted++
+			}
+			resultMu.Unlock()
+
 			if err := db.DeleteFile(fi.id); err != nil {
 				util.Logger.Error().Err(err).Str("path", fi.path).Int64("id", fi.id).Msg("failed to delete file record")
-				return err
+				return SyncResult{}, err
 			}
 		}
 	}
 
-	return nil
+	// Deduct moved-to files from Added/Modified so each old file maps to
+	// exactly one state.
+	for _, s := range movedToState {
+		switch s {
+		case FileAdded:
+			result.Added--
+		case FileModified:
+			result.Modified--
+		}
+	}
+
+	return result, nil
 }
 
-func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collectionName string, parserName string, cfg *config.Config) error {
+func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collectionName string, parserName string, cfg *config.Config) (FileState, string, error) {
 	info, err := os.Stat(absPath)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", absPath).Msg("failed to stat file")
-		return err
+		return FileUnchanged, "", err
 	}
 
 	size := info.Size()
@@ -270,19 +349,22 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 	hash, err := computeSHA256(absPath)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", absPath).Msg("failed to compute hash")
-		return err
+		return FileUnchanged, "", err
 	}
 
 	contentBytes, err := os.ReadFile(absPath)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", absPath).Msg("failed to read file")
-		return err
+		return FileUnchanged, "", err
 	}
 	content := string(contentBytes)
+
+	fileState := FileModified
 
 	fileRecord, err := db.GetFile(relPath)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			fileState = FileAdded
 			fileRecord = &project.FileRecord{
 				FilePath:    relPath,
 				Filename:    filepath.Base(relPath),
@@ -292,32 +374,32 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 			}
 			if err := db.SaveFile(fileRecord); err != nil {
 				util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to save file")
-				return err
+				return FileUnchanged, "", err
 			}
 		} else {
 			util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to query file")
-			return err
+			return FileUnchanged, "", err
 		}
 	} else {
 		if fileRecord.ModifiedAt == mtime {
 			util.Logger.Debug().Str("path", relPath).Msg("Skipping file (mtime matches)")
-			return nil
+			return FileUnchanged, hash, nil
 		}
 		if fileRecord.ContentHash == hash {
 			util.Logger.Debug().Str("path", relPath).Msg("Skipping file (hash matches)")
 			fileRecord.ModifiedAt = mtime
 			if err := db.SaveFile(fileRecord); err != nil {
 				util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to update modified time")
-				return err
+				return FileUnchanged, "", err
 			}
-			return nil
+			return FileUnchanged, hash, nil
 		}
 		fileRecord.Size = size
 		fileRecord.ModifiedAt = mtime
 		fileRecord.ContentHash = hash
 		if err := db.SaveFile(fileRecord); err != nil {
 			util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to update file")
-			return err
+			return FileUnchanged, "", err
 		}
 	}
 
@@ -333,27 +415,27 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 			}
 		} else {
 			util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to get document")
-			return err
+			return FileUnchanged, "", err
 		}
 	} else {
 		if err := db.DeleteChunksForDocument(docRecord.ID); err != nil {
 			util.Logger.Error().Err(err).Int64("doc_id", docRecord.ID).Msg("failed to delete old chunks")
-			return err
+			return FileUnchanged, "", err
 		}
 	}
 
 	p, ok := parser.GetParser(parserName)
 	if !ok {
 		util.Logger.Error().Str("parser", parserName).Msg("parser not found in registry")
-		return errors.New("parser not found")
+		return FileUnchanged, "", errors.New("parser not found")
 	}
 
-	util.Logger.Info().Str("path", relPath).Str("parser", parserName).Msg("Ingesting file")
+	util.Logger.Debug().Str("path", relPath).Str("parser", parserName).Msg("Ingesting file")
 
 	parsedDoc, err := p.Parse(relPath, content, size)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", relPath).Str("parser", parserName).Msg("failed to parse file")
-		return err
+		return FileUnchanged, "", err
 	}
 
 	slug := parsedDoc.Slug
@@ -367,7 +449,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 
 	if err := db.SaveDocument(docRecord); err != nil {
 		util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to save document")
-		return err
+		return FileUnchanged, "", err
 	}
 
 	for i, chunk := range parsedDoc.Chunks {
@@ -375,11 +457,11 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 		chunk.ChunkIndex = i
 		if err := db.SaveChunk(chunk); err != nil {
 			util.Logger.Error().Err(err).Str("path", relPath).Int("chunk_idx", i).Msg("failed to save chunk")
-			return err
+			return FileUnchanged, "", err
 		}
 	}
 
-	return nil
+	return fileState, hash, nil
 }
 
 // fileFilter applies files/include/exclude rules from a collection config.

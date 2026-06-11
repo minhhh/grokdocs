@@ -66,7 +66,7 @@ func TestFileWalking(t *testing.T) {
 	}
 	defer db.Close()
 
-	if err := SyncCollection(proj, "default"); err != nil {
+	if _, err := SyncCollection(proj, "default", nil); err != nil {
 		t.Fatalf("SyncCollection failed: %v", err)
 	}
 
@@ -216,7 +216,7 @@ We hope you enjoy searching locally and offline.
 	defer db.Close()
 
 	// Initial sync
-	if err := SyncCollection(proj, "default"); err != nil {
+	if _, err := SyncCollection(proj, "default", nil); err != nil {
 		t.Fatalf("SyncCollection failed: %v", err)
 	}
 
@@ -248,7 +248,7 @@ We have replaced the word and added remote.
 		t.Fatal(err)
 	}
 
-	if err := SyncCollection(proj, "default"); err != nil {
+	if _, err := SyncCollection(proj, "default", nil); err != nil {
 		t.Fatalf("SyncCollection failed: %v", err)
 	}
 
@@ -275,7 +275,7 @@ We have replaced the word and added remote.
 		t.Fatal(err)
 	}
 
-	if err := SyncCollection(proj, "default"); err != nil {
+	if _, err := SyncCollection(proj, "default", nil); err != nil {
 		t.Fatalf("SyncCollection failed: %v", err)
 	}
 
@@ -558,7 +558,7 @@ func TestSyncCollectionWithFileFiltering(t *testing.T) {
 	}
 	defer db.Close()
 
-	if err := SyncCollection(proj, "default"); err != nil {
+	if _, err := SyncCollection(proj, "default", nil); err != nil {
 		t.Fatalf("SyncCollection failed: %v", err)
 	}
 
@@ -621,10 +621,10 @@ func TestParserResolutionAndPrecedence(t *testing.T) {
 		t.Errorf("expected javascript-parser, got %s (ok=%t)", pName, ok)
 	}
 
-	// 5. Unmatched file
-	_, ok = parser.ResolveParserName(cfg, "default", "path/to/style.css")
-	if ok {
-		t.Errorf("expected no match for style.css")
+	// 5. Unmatched file falls back to default parser mapping
+	pName, ok = parser.ResolveParserName(cfg, "default", "path/to/style.css")
+	if !ok || pName != "chunkx" {
+		t.Errorf("expected chunkx, got %s (ok=%t)", pName, ok)
 	}
 }
 
@@ -928,7 +928,7 @@ func TestSyncSkipsUnchangedFile(t *testing.T) {
 	defer db.Close()
 
 	// First sync — ingests the file
-	if err := SyncCollection(proj, "default"); err != nil {
+	if _, err := SyncCollection(proj, "default", nil); err != nil {
 		t.Fatalf("first SyncCollection failed: %v", err)
 	}
 
@@ -938,7 +938,7 @@ func TestSyncSkipsUnchangedFile(t *testing.T) {
 	}
 
 	// Second sync — mtime matches, should hit mtime-skip branch
-	if err := SyncCollection(proj, "default"); err != nil {
+	if _, err := SyncCollection(proj, "default", nil); err != nil {
 		t.Fatalf("second SyncCollection failed: %v", err)
 	}
 
@@ -959,6 +959,87 @@ func TestSyncSkipsUnchangedFile(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected 1 file record, got %d", count)
+	}
+}
+
+func TestSyncCollectionResult(t *testing.T) {
+	root := t.TempDir()
+
+	docsDir := filepath.Join(root, "docs")
+	if err := os.MkdirAll(docsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".grokdocs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, root, "docs/intro.md", "# Intro\nSame content")
+	writeFile(t, root, "docs/guide.md", "# Guide\nOld content")
+	writeFile(t, root, "docs/old-moved.md", "# Moved\nContent that will move")
+	writeFile(t, root, "docs/config.md", "# Config\nWill be deleted")
+
+	proj, err := project.NewProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj.Config = &config.Config{
+		Collections: map[string]config.CollectionConfig{
+			"default": {
+				Path:    "docs",
+				Parsers: map[string]string{".md": "markdown"},
+			},
+		},
+	}
+
+	// First sync — ingest all 4 files
+	if _, err := SyncCollection(proj, "default", nil); err != nil {
+		t.Fatalf("first SyncCollection failed: %v", err)
+	}
+
+	// Wait so subsequent writes get a different Unix-second mtime
+	time.Sleep(2 * time.Second)
+
+	// Modify guide.md
+	if err := os.WriteFile(filepath.Join(docsDir, "guide.md"), []byte("# Guide\nUpdated content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete old-moved.md and config.md
+	if err := os.Remove(filepath.Join(docsDir, "old-moved.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(docsDir, "config.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create moved.md with identical content to old-moved.md (same hash — counted as moved, not added)
+	writeFile(t, root, "docs/moved.md", "# Moved\nContent that will move")
+
+	// Create newfile.md with truly new content (counted as added)
+	writeFile(t, root, "docs/newfile.md", "# New file\nBrand new content")
+
+	// intro.md is untouched — unchanged
+
+	// Second sync
+	result, err := SyncCollection(proj, "default", nil)
+	if err != nil {
+		t.Fatalf("second SyncCollection failed: %v", err)
+	}
+
+	if result.Unchanged != 1 {
+		t.Errorf("expected 1 unchanged, got %d", result.Unchanged)
+	}
+	if result.Added != 1 {
+		t.Errorf("expected 1 added, got %d", result.Added)
+	}
+	if result.Modified != 1 {
+		t.Errorf("expected 1 modified, got %d", result.Modified)
+	}
+	if result.Moved != 1 {
+		t.Errorf("expected 1 moved, got %d", result.Moved)
+	}
+	if result.Deleted != 1 {
+		t.Errorf("expected 1 deleted, got %d", result.Deleted)
 	}
 }
 

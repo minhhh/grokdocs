@@ -1,11 +1,15 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/minhhh/grokdocs/internal/ingest"
 	"github.com/minhhh/grokdocs/internal/project"
 	"github.com/minhhh/grokdocs/internal/util"
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
 
@@ -51,11 +55,44 @@ var syncCmd = &cobra.Command{
 		}
 
 		for _, coll := range targets {
-			if err := ingest.SyncCollection(proj, coll); err != nil {
+			bar := progressbar.NewOptions(-1,
+				progressbar.OptionSetDescription("Processing files"),
+				progressbar.OptionSetWriter(os.Stderr),
+				progressbar.OptionShowCount(),
+				progressbar.OptionThrottle(100*time.Millisecond),
+			)
+
+			progress := make(chan ingest.SyncProgress)
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				var finalCount int
+				for p := range progress {
+					bar.Add(p.FilesProcessed - finalCount)
+					finalCount = p.FilesProcessed
+				}
+				bar.ChangeMax(finalCount)
+				bar.Set(finalCount)
+				bar.Finish()
+				fmt.Fprintln(os.Stderr)
+			}()
+
+			result, err := ingest.SyncCollection(proj, coll, progress)
+			close(progress)
+			wg.Wait()
+
+			if err != nil {
 				os.Exit(1)
 			}
+
+			fmt.Fprintln(os.Stderr, "Sync complete:")
+			fmt.Fprintf(os.Stderr, "  unchanged: %d\n", result.Unchanged)
+			fmt.Fprintf(os.Stderr, "  added:     %d\n", result.Added)
+			fmt.Fprintf(os.Stderr, "  modified:  %d\n", result.Modified)
+			fmt.Fprintf(os.Stderr, "  moved:     %d\n", result.Moved)
+			fmt.Fprintf(os.Stderr, "  deleted:   %d\n", result.Deleted)
 		}
-		util.Logger.Info().Msg("Sync completed successfully.")
 	},
 }
 

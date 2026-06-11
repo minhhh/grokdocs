@@ -8,6 +8,8 @@ import (
 	"github.com/minhhh/grokdocs/internal/project"
 )
 
+const DefaultChunkMaxSize = 500
+
 // SectionHeader represents a parsed Markdown section header.
 type SectionHeader struct {
 	Title      string
@@ -104,10 +106,65 @@ func matchesPattern(path string, pattern string) bool {
 }
 
 // defaultParserMapping maps file extensions to parser names when no
-// collection-level parsers are configured.
+// collection-level parsers are configured. Extensions not listed here
+// fall back to the chunkx auto-detection parser.
 var defaultParserMapping = map[string]string{
-	".md":       "markdown",
-	".markdown": "markdown",
+	".md":         "markdown",
+	".markdown":   "markdown",
+	".bash":       "chunkx",
+	".c":          "chunkx",
+	".cc":         "chunkx",
+	".cjs":        "chunkx",
+	".cpp":        "chunkx",
+	".cs":         "chunkx",
+	".css":        "chunkx",
+	".cxx":        "chunkx",
+	".dockerfile": "chunkx",
+	".elm":        "chunkx",
+	".ex":         "chunkx",
+	".exs":        "chunkx",
+	".go":         "chunkx",
+	".gradle":     "chunkx",
+	".groovy":     "chunkx",
+	".h":          "chunkx",
+	".hcl":        "chunkx",
+	".hh":         "chunkx",
+	".hpp":        "chunkx",
+	".htm":        "chunkx",
+	".html":       "chunkx",
+	".hxx":        "chunkx",
+	".java":       "chunkx",
+	".js":         "chunkx",
+	".jsx":        "chunkx",
+	".kt":         "chunkx",
+	".kts":        "chunkx",
+	".lua":        "chunkx",
+	".mjs":        "chunkx",
+	".ml":         "chunkx",
+	".mli":        "chunkx",
+	".php":        "chunkx",
+	".phtml":      "chunkx",
+	".proto":      "chunkx",
+	".py":         "chunkx",
+	".pyi":        "chunkx",
+	".pyw":        "chunkx",
+	".rake":       "chunkx",
+	".rb":         "chunkx",
+	".rs":         "chunkx",
+	".sc":         "chunkx",
+	".scala":      "chunkx",
+	".sh":         "chunkx",
+	".sql":        "chunkx",
+	".svelte":     "chunkx",
+	".swift":      "chunkx",
+	".tf":         "chunkx",
+	".toml":       "chunkx",
+	".ts":         "chunkx",
+	".tsx":        "chunkx",
+	".yaml":       "chunkx",
+	".yml":        "chunkx",
+	"Dockerfile":  "chunkx",
+	".gemspec":    "chunkx",
 }
 
 func ResolveParserName(cfg *config.Config, collectionName string, path string) (string, bool) {
@@ -139,6 +196,9 @@ func ResolveParserName(cfg *config.Config, collectionName string, path string) (
 
 	if len(candidates) == 0 {
 		if parserName, ok := defaultParserMapping[filepath.Ext(path)]; ok {
+			return parserName, true
+		}
+		if parserName, ok := defaultParserMapping[filepath.Base(path)]; ok {
 			return parserName, true
 		}
 		return "", false
