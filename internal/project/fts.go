@@ -195,6 +195,38 @@ func (f *FTSDatabase) SaveFile(file *FileRecord) error {
 	return nil
 }
 
+// CollectionFile represents a file record scoped to a collection.
+type CollectionFile struct {
+	ID      int64
+	Path    string
+	Hash    string
+}
+
+// ListCollectionFiles returns all files belonging to a collection.
+func (f *FTSDatabase) ListCollectionFiles(collectionName string) ([]CollectionFile, error) {
+	rows, err := f.db.Query(`
+		SELECT f.id, f.file_path, f.content_hash
+		FROM files f
+		JOIN documents d ON f.id = d.file_id
+		WHERE d.collection = ?`, collectionName)
+	if err != nil {
+		util.Logger.Error().Err(err).Msg("failed to query collection files")
+		return nil, err
+	}
+	defer rows.Close()
+
+	var files []CollectionFile
+	for rows.Next() {
+		var cf CollectionFile
+		if err := rows.Scan(&cf.ID, &cf.Path, &cf.Hash); err != nil {
+			util.Logger.Error().Err(err).Msg("failed to scan collection file row")
+			return nil, err
+		}
+		files = append(files, cf)
+	}
+	return files, nil
+}
+
 // DeleteFile deletes a file by ID (triggers cascading deletes to documents and chunks).
 func (f *FTSDatabase) DeleteFile(id int64) error {
 	_, err := f.db.Exec("DELETE FROM files WHERE id = ?", id)

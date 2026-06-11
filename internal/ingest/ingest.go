@@ -273,50 +273,27 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 		return SyncResult{}, err
 	}
 
-	// Cleanup files in database that are no longer on disk for this collection.
-	// Detect moved vs deleted by comparing content hashes.
-	rows, err := db.DB().Query(`
-		SELECT f.id, f.file_path, f.content_hash
-		FROM files f
-		JOIN documents d ON f.id = d.file_id
-		WHERE d.collection = ?`, collectionName)
+	dbFiles, err := db.ListCollectionFiles(collectionName)
 	if err != nil {
-		util.Logger.Error().Err(err).Msg("failed to query collection files for cleanup")
 		return SyncResult{}, err
-	}
-	defer rows.Close()
-
-	type fileInfo struct {
-		id   int64
-		path string
-		hash string
-	}
-	var dbFiles []fileInfo
-	for rows.Next() {
-		var fi fileInfo
-		if err := rows.Scan(&fi.id, &fi.path, &fi.hash); err != nil {
-			util.Logger.Error().Err(err).Msg("failed to scan file row")
-			return SyncResult{}, err
-		}
-		dbFiles = append(dbFiles, fi)
 	}
 
 	for _, fi := range dbFiles {
 		seenMu.Lock()
-		_, ok := seenFiles[fi.path]
+		_, ok := seenFiles[fi.Path]
 		seenMu.Unlock()
 		if !ok {
 			resultMu.Lock()
-			if destState, isMoved := newFileHashes[fi.hash]; isMoved {
+			if destState, isMoved := newFileHashes[fi.Hash]; isMoved {
 				result.Moved++
-				movedToState[fi.hash] = destState
+				movedToState[fi.Hash] = destState
 			} else {
 				result.Deleted++
 			}
 			resultMu.Unlock()
 
-			if err := db.DeleteFile(fi.id); err != nil {
-				util.Logger.Error().Err(err).Str("path", fi.path).Int64("id", fi.id).Msg("failed to delete file record")
+			if err := db.DeleteFile(fi.ID); err != nil {
+				util.Logger.Error().Err(err).Str("path", fi.Path).Int64("id", fi.ID).Msg("failed to delete file record")
 				return SyncResult{}, err
 			}
 		}
