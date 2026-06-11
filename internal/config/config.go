@@ -38,59 +38,59 @@ func DefaultConfig() *Config {
 }
 
 // LoadConfig loads configuration from a reader.
-func LoadConfig(r io.Reader) (*Config, error) {
+func LoadConfig(reader io.Reader) (*Config, error) {
 	var cfg Config
-	dec := yaml.NewDecoder(r)
+	dec := yaml.NewDecoder(reader)
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, err
 	}
-	for name, col := range cfg.Collections {
-		if col.Path == "" {
-			col.Path = DefaultCollectionPath
-			cfg.Collections[name] = col
+	for name, collection := range cfg.Collections {
+		if collection.Path == "" {
+			collection.Path = DefaultCollectionPath
+			cfg.Collections[name] = collection
 		}
 	}
 	return &cfg, nil
 }
 
 // SaveConfig writes configuration to a writer.
-func (c *Config) SaveConfig(w io.Writer) error {
-	for name, col := range c.Collections {
-		if len(col.Parsers) == 0 {
-			col.Parsers = nil
+func (c *Config) SaveConfig(writer io.Writer) error {
+	for name, collection := range c.Collections {
+		if len(collection.Parsers) == 0 {
+			collection.Parsers = nil
 		}
-		if len(col.Files) == 0 {
-			col.Files = nil
+		if len(collection.Files) == 0 {
+			collection.Files = nil
 		}
-		if len(col.Include) == 0 {
-			col.Include = nil
+		if len(collection.Include) == 0 {
+			collection.Include = nil
 		}
-		if len(col.Exclude) == 0 {
-			col.Exclude = nil
+		if len(collection.Exclude) == 0 {
+			collection.Exclude = nil
 		}
-		c.Collections[name] = col
+		c.Collections[name] = collection
 	}
-	enc := yaml.NewEncoder(w)
+	enc := yaml.NewEncoder(writer)
 	enc.SetIndent(2)
 	return enc.Encode(c)
 }
 
 // LoadFromFile loads configuration from a YAML file.
 func LoadFromFile(filePath string) (*Config, error) {
-	f, err := os.Open(filePath)
+	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	return LoadConfig(f)
+	defer file.Close()
+	return LoadConfig(file)
 }
 
 // SaveToFile saves configuration to a YAML file.
 func (c *Config) SaveToFile(filePath string) error {
-	f, err := os.Create(filePath)
+	file, err := os.Create(filePath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return c.SaveConfig(f)
+	defer file.Close()
+	return c.SaveConfig(file)
 }

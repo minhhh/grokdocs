@@ -19,8 +19,8 @@ type ChunkxParser struct {
 
 func (cp *ChunkxParser) Parse(relPath string, content string, fileSize int64) (*ParsedDocument, error) {
 	var lang languages.LanguageName
-	if config, ok := languages.DetectLanguage(relPath); ok {
-		lang = config.Name
+	if detectedLang, ok := languages.DetectLanguage(relPath); ok {
+		lang = detectedLang.Name
 	} else {
 		lang = cp.DefaultLanguage
 	}
@@ -48,18 +48,18 @@ func (cp *ChunkxParser) Parse(relPath string, content string, fileSize int64) (*
 	headers := parseHeaders(content)
 
 	var chunks []*project.ChunkRecord
-	for i, cx := range cxChunks {
+	for i, chunk := range cxChunks {
 		sectionTitle := ""
 		sectionNum := 0
-		for idx, h := range headers {
-			if h.LineNumber <= cx.StartLine {
-				sectionTitle = h.Title
+		for idx, header := range headers {
+			if header.LineNumber <= chunk.StartLine {
+				sectionTitle = header.Title
 				sectionNum = idx + 1
 			}
 		}
 
-		sum := sha256.Sum256([]byte(cx.Content))
-		chunkHash := fmt.Sprintf("%x", sum)
+		checksum := sha256.Sum256([]byte(chunk.Content))
+		chunkHash := fmt.Sprintf("%x", checksum)
 
 		metaMap := map[string]any{
 			"filename":      filepath.Base(relPath),
@@ -70,11 +70,11 @@ func (cp *ChunkxParser) Parse(relPath string, content string, fileSize int64) (*
 
 		chunks = append(chunks, &project.ChunkRecord{
 			ChunkIndex:   i,
-			TextContent:  cx.Content,
+			TextContent:  chunk.Content,
 			ContentHash:  chunkHash,
-			TotalChars:   int64(len(cx.Content)),
-			LineStart:    cx.StartLine,
-			LineEnd:      cx.EndLine,
+			TotalChars:   int64(len(chunk.Content)),
+			LineStart:    chunk.StartLine,
+			LineEnd:      chunk.EndLine,
 			SectionNum:   sectionNum,
 			SectionTitle: sectionTitle,
 			Metadata:     string(metaBytes),

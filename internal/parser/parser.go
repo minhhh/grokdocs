@@ -47,12 +47,12 @@ func parseHeaders(content string) []SectionHeader {
 		lineNum := i + 1
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {
-			hCount := 0
-			for hCount < len(trimmed) && trimmed[hCount] == '#' {
-				hCount++
+			headingLevel := 0
+			for headingLevel < len(trimmed) && trimmed[headingLevel] == '#' {
+				headingLevel++
 			}
-			if hCount < len(trimmed) && (trimmed[hCount] == ' ' || trimmed[hCount] == '\t') {
-				title := strings.TrimSpace(trimmed[hCount:])
+			if headingLevel < len(trimmed) && (trimmed[headingLevel] == ' ' || trimmed[headingLevel] == '\t') {
+				title := strings.TrimSpace(trimmed[headingLevel:])
 				headers = append(headers, SectionHeader{
 					Title:      title,
 					LineNumber: lineNum,
@@ -205,12 +205,12 @@ func ResolveParserName(cfg *config.Config, collectionName string, path string) (
 	}
 
 	best := candidates[0]
-	for _, c := range candidates[1:] {
-		if c.priority > best.priority {
-			best = c
-		} else if c.priority == best.priority {
-			if len(c.pattern) > len(best.pattern) {
-				best = c
+	for _, candidate := range candidates[1:] {
+		if candidate.priority > best.priority {
+			best = candidate
+		} else if candidate.priority == best.priority {
+			if len(candidate.pattern) > len(best.pattern) {
+				best = candidate
 			}
 		}
 	}

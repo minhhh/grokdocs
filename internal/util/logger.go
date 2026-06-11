@@ -32,18 +32,18 @@ type verboseWriter struct {
 }
 
 func (vw *verboseWriter) Write(p []byte) (int, error) {
-	var evt map[string]any
-	if err := json.Unmarshal(p, &evt); err != nil {
+	var event map[string]any
+	if err := json.Unmarshal(p, &event); err != nil {
 		return len(p), nil
 	}
 
-	ts, _ := evt["time"].(string)
-	lvl, _ := evt["level"].(string)
-	msg, _ := evt["message"].(string)
+	timestamp, _ := event["time"].(string)
+	lvl, _ := event["level"].(string)
+	msg, _ := event["message"].(string)
 
 	parts := []string{}
-	if ts != "" {
-		parts = append(parts, ts)
+	if timestamp != "" {
+		parts = append(parts, timestamp)
 	}
 	if lvl != "" {
 		switch lvl {
@@ -67,7 +67,7 @@ func (vw *verboseWriter) Write(p []byte) (int, error) {
 	parts = append(parts, msg)
 
 	// Append key=val fields
-	for k, v := range evt {
+	for k, v := range event {
 		if k == "time" || k == "level" || k == "message" {
 			continue
 		}
@@ -85,13 +85,13 @@ type minimalWriter struct {
 }
 
 func (mw *minimalWriter) Write(p []byte) (int, error) {
-	var evt map[string]any
-	if err := json.Unmarshal(p, &evt); err != nil {
+	var event map[string]any
+	if err := json.Unmarshal(p, &event); err != nil {
 		return len(p), nil
 	}
 
-	lvl, _ := evt["level"].(string)
-	msg, _ := evt["message"].(string)
+	lvl, _ := event["level"].(string)
+	msg, _ := event["message"].(string)
 
 	prefix := ""
 	if lvl == "warn" {
@@ -103,7 +103,7 @@ func (mw *minimalWriter) Write(p []byte) (int, error) {
 	parts := []string{prefix + msg}
 
 	// Append key=val fields
-	for k, v := range evt {
+	for k, v := range event {
 		if k == "time" || k == "level" || k == "message" {
 			continue
 		}
@@ -135,9 +135,9 @@ func InitLogger(w io.Writer, verbose bool, format LogFormat) {
 		lvl = zerolog.InfoLevel
 	}
 
-	l := zerolog.New(out)
+	logger := zerolog.New(out)
 	if withTimestamp {
-		l = l.With().Timestamp().Logger()
+		logger = logger.With().Timestamp().Logger()
 	}
-	Logger = l.Level(lvl)
+	Logger = logger.Level(lvl)
 }

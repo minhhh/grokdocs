@@ -130,25 +130,25 @@ func OpenFTSDatabase(dbPath string) (*FTSDatabase, error) {
 }
 
 // Close closes the SQLite database connection.
-func (f *FTSDatabase) Close() error {
-	if f.db != nil {
-		return f.db.Close()
+func (fts *FTSDatabase) Close() error {
+	if fts.db != nil {
+		return fts.db.Close()
 	}
 	return nil
 }
 
 // DB returns the underlying sql.DB connection.
-func (f *FTSDatabase) DB() *sql.DB {
-	return f.db
+func (fts *FTSDatabase) DB() *sql.DB {
+	return fts.db
 }
 
 // InitSchema initializes database tables, FTS5 virtual table, and triggers.
-func (f *FTSDatabase) InitSchema() error {
-	if _, err := f.db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
+func (fts *FTSDatabase) InitSchema() error {
+	if _, err := fts.db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
 		util.Logger.Error().Err(err).Msg("failed to enable foreign keys")
 		return err
 	}
-	if _, err := f.db.Exec(createAllTablesSQL); err != nil {
+	if _, err := fts.db.Exec(createAllTablesSQL); err != nil {
 		util.Logger.Error().Err(err).Str("query", createAllTablesSQL).Msg("failed to execute schema")
 		return err
 	}
@@ -156,34 +156,34 @@ func (f *FTSDatabase) InitSchema() error {
 }
 
 // GetFile retrieves file metadata by path. Returns sql.ErrNoRows if not found.
-func (f *FTSDatabase) GetFile(filePath string) (*FileRecord, error) {
-	row := f.db.QueryRow(`
+func (fts *FTSDatabase) GetFile(filePath string) (*FileRecord, error) {
+	row := fts.db.QueryRow(`
 		SELECT id, file_path, filename, size, modified_at, content_hash
 		FROM files WHERE file_path = ?`, filePath)
-	var r FileRecord
-	if err := row.Scan(&r.ID, &r.FilePath, &r.Filename, &r.Size, &r.ModifiedAt, &r.ContentHash); err != nil {
+	var record FileRecord
+	if err := row.Scan(&record.ID, &record.FilePath, &record.Filename, &record.Size, &record.ModifiedAt, &record.ContentHash); err != nil {
 		return nil, err
 	}
-	return &r, nil
+	return &record, nil
 }
 
 // SaveFile inserts or updates a file.
-func (f *FTSDatabase) SaveFile(file *FileRecord) error {
+func (fts *FTSDatabase) SaveFile(file *FileRecord) error {
 	if file.ID == 0 {
-		res, err := f.db.Exec(`
+		result, err := fts.db.Exec(`
 			INSERT INTO files (file_path, filename, size, modified_at, content_hash)
 			VALUES (?, ?, ?, ?, ?)`,
 			file.FilePath, file.Filename, file.Size, file.ModifiedAt, file.ContentHash)
 		if err != nil {
 			return err
 		}
-		id, err := res.LastInsertId()
+		lastID, err := result.LastInsertId()
 		if err != nil {
 			return err
 		}
-		file.ID = id
+		file.ID = lastID
 	} else {
-		_, err := f.db.Exec(`
+		_, err := fts.db.Exec(`
 			UPDATE files
 			SET file_path = ?, filename = ?, size = ?, modified_at = ?, content_hash = ?
 			WHERE id = ?`,
@@ -203,8 +203,8 @@ type CollectionFile struct {
 }
 
 // ListCollectionFiles returns all files belonging to a collection.
-func (f *FTSDatabase) ListCollectionFiles(collectionName string) ([]CollectionFile, error) {
-	rows, err := f.db.Query(`
+func (fts *FTSDatabase) ListCollectionFiles(collectionName string) ([]CollectionFile, error) {
+	rows, err := fts.db.Query(`
 		SELECT f.id, f.file_path, f.content_hash
 		FROM files f
 		JOIN documents d ON f.id = d.file_id
@@ -217,60 +217,60 @@ func (f *FTSDatabase) ListCollectionFiles(collectionName string) ([]CollectionFi
 
 	var files []CollectionFile
 	for rows.Next() {
-		var cf CollectionFile
-		if err := rows.Scan(&cf.ID, &cf.Path, &cf.Hash); err != nil {
+		var collectionFile CollectionFile
+		if err := rows.Scan(&collectionFile.ID, &collectionFile.Path, &collectionFile.Hash); err != nil {
 			util.Logger.Error().Err(err).Msg("failed to scan collection file row")
 			return nil, err
 		}
-		files = append(files, cf)
+		files = append(files, collectionFile)
 	}
 	return files, nil
 }
 
 // DeleteFile deletes a file by ID (triggers cascading deletes to documents and chunks).
-func (f *FTSDatabase) DeleteFile(id int64) error {
-	_, err := f.db.Exec("DELETE FROM files WHERE id = ?", id)
+func (fts *FTSDatabase) DeleteFile(id int64) error {
+	_, err := fts.db.Exec("DELETE FROM files WHERE id = ?", id)
 	return err
 }
 
 // GetDocument retrieves document mapping by file ID and collection. Returns sql.ErrNoRows if not found.
-func (f *FTSDatabase) GetDocument(fileID int64, collection string) (*DocumentRecord, error) {
-	row := f.db.QueryRow(`
+func (fts *FTSDatabase) GetDocument(fileID int64, collection string) (*DocumentRecord, error) {
+	row := fts.db.QueryRow(`
 		SELECT id, file_id, collection, slug, chunk_count, total_chars, metadata
 		FROM documents WHERE file_id = ? AND collection = ?`, fileID, collection)
-	var r DocumentRecord
+	var record DocumentRecord
 	var metadata sql.NullString
-	if err := row.Scan(&r.ID, &r.FileID, &r.Collection, &r.Slug, &r.ChunkCount, &r.TotalChars, &metadata); err != nil {
+	if err := row.Scan(&record.ID, &record.FileID, &record.Collection, &record.Slug, &record.ChunkCount, &record.TotalChars, &metadata); err != nil {
 		return nil, err
 	}
 	if metadata.Valid {
-		r.Metadata = metadata.String
+		record.Metadata = metadata.String
 	}
-	return &r, nil
+	return &record, nil
 }
 
 // SaveDocument inserts or updates a document map.
-func (f *FTSDatabase) SaveDocument(doc *DocumentRecord) error {
+func (fts *FTSDatabase) SaveDocument(doc *DocumentRecord) error {
 	var metadata any = nil
 	if doc.Metadata != "" {
 		metadata = doc.Metadata
 	}
 
 	if doc.ID == 0 {
-		res, err := f.db.Exec(`
+		result, err := fts.db.Exec(`
 			INSERT INTO documents (file_id, collection, slug, chunk_count, total_chars, metadata)
 			VALUES (?, ?, ?, ?, ?, ?)`,
 			doc.FileID, doc.Collection, doc.Slug, doc.ChunkCount, doc.TotalChars, metadata)
 		if err != nil {
 			return err
 		}
-		id, err := res.LastInsertId()
+		lastID, err := result.LastInsertId()
 		if err != nil {
 			return err
 		}
-		doc.ID = id
+		doc.ID = lastID
 	} else {
-		_, err := f.db.Exec(`
+		_, err := fts.db.Exec(`
 			UPDATE documents
 			SET file_id = ?, collection = ?, slug = ?, chunk_count = ?, total_chars = ?, metadata = ?
 			WHERE id = ?`,
@@ -283,8 +283,8 @@ func (f *FTSDatabase) SaveDocument(doc *DocumentRecord) error {
 }
 
 // GetChunksForDocument retrieves all chunks for a document in order.
-func (f *FTSDatabase) GetChunksForDocument(docID int64) ([]*ChunkRecord, error) {
-	rows, err := f.db.Query(`
+func (fts *FTSDatabase) GetChunksForDocument(docID int64) ([]*ChunkRecord, error) {
+	rows, err := fts.db.Query(`
 		SELECT id, document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, metadata
 		FROM chunks WHERE document_id = ? ORDER BY chunk_index ASC`, docID)
 	if err != nil {
@@ -294,32 +294,32 @@ func (f *FTSDatabase) GetChunksForDocument(docID int64) ([]*ChunkRecord, error) 
 
 	var chunks []*ChunkRecord
 	for rows.Next() {
-		var r ChunkRecord
+		var record ChunkRecord
 		var metadata sql.NullString
 		err := rows.Scan(
-			&r.ID, &r.DocumentID, &r.ChunkIndex, &r.TextContent, &r.ContentHash, &r.TotalChars,
-			&r.LineStart, &r.LineEnd, &r.SectionNum, &r.SectionTitle, &metadata,
+			&record.ID, &record.DocumentID, &record.ChunkIndex, &record.TextContent, &record.ContentHash, &record.TotalChars,
+			&record.LineStart, &record.LineEnd, &record.SectionNum, &record.SectionTitle, &metadata,
 		)
 		if err != nil {
 			return nil, err
 		}
 		if metadata.Valid {
-			r.Metadata = metadata.String
+			record.Metadata = metadata.String
 		}
-		chunks = append(chunks, &r)
+		chunks = append(chunks, &record)
 	}
 	return chunks, nil
 }
 
 // SaveChunk inserts or updates a text chunk.
-func (f *FTSDatabase) SaveChunk(chunk *ChunkRecord) error {
+func (fts *FTSDatabase) SaveChunk(chunk *ChunkRecord) error {
 	var metadata any = nil
 	if chunk.Metadata != "" {
 		metadata = chunk.Metadata
 	}
 
 	if chunk.ID == 0 {
-		res, err := f.db.Exec(`
+		result, err := fts.db.Exec(`
 			INSERT INTO chunks (document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, metadata)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			chunk.DocumentID, chunk.ChunkIndex, chunk.TextContent, chunk.ContentHash, chunk.TotalChars,
@@ -328,13 +328,13 @@ func (f *FTSDatabase) SaveChunk(chunk *ChunkRecord) error {
 		if err != nil {
 			return err
 		}
-		id, err := res.LastInsertId()
+		lastID, err := result.LastInsertId()
 		if err != nil {
 			return err
 		}
-		chunk.ID = id
+		chunk.ID = lastID
 	} else {
-		_, err := f.db.Exec(`
+		_, err := fts.db.Exec(`
 			UPDATE chunks
 			SET document_id = ?, chunk_index = ?, text_content = ?, content_hash = ?, total_chars = ?, line_start = ?, line_end = ?, section_num = ?, section_title = ?, metadata = ?
 			WHERE id = ?`,
@@ -349,13 +349,13 @@ func (f *FTSDatabase) SaveChunk(chunk *ChunkRecord) error {
 }
 
 // DeleteChunksForDocument deletes all chunks for a document.
-func (f *FTSDatabase) DeleteChunksForDocument(docID int64) error {
-	_, err := f.db.Exec("DELETE FROM chunks WHERE document_id = ?", docID)
+func (fts *FTSDatabase) DeleteChunksForDocument(docID int64) error {
+	_, err := fts.db.Exec("DELETE FROM chunks WHERE document_id = ?", docID)
 	return err
 }
 
 // SearchFTS queries the FTS5 virtual table for matching text and returns matching chunks + FTS BM25 rank score.
-func (f *FTSDatabase) SearchFTS(queryText string, collection string, limit int) ([]*FTSResult, error) {
+func (fts *FTSDatabase) SearchFTS(queryText string, collection string, limit int) ([]*FTSResult, error) {
 	sqlQuery := `
 		SELECT c.id, c.document_id, c.chunk_index, c.text_content, c.content_hash, c.total_chars, c.line_start, c.line_end, c.section_num, c.section_title, c.metadata, f.rank
 		FROM chunks c
@@ -373,7 +373,7 @@ func (f *FTSDatabase) SearchFTS(queryText string, collection string, limit int) 
 	sqlQuery += " ORDER BY f.rank LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := f.db.Query(sqlQuery, args...)
+	rows, err := fts.db.Query(sqlQuery, args...)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("query", sqlQuery).Msg("FTS query failed")
 		return nil, err
@@ -382,21 +382,21 @@ func (f *FTSDatabase) SearchFTS(queryText string, collection string, limit int) 
 
 	var results []*FTSResult
 	for rows.Next() {
-		var r ChunkRecord
+		var record ChunkRecord
 		var rank float64
 		var metadata sql.NullString
 		err := rows.Scan(
-			&r.ID, &r.DocumentID, &r.ChunkIndex, &r.TextContent, &r.ContentHash, &r.TotalChars,
-			&r.LineStart, &r.LineEnd, &r.SectionNum, &r.SectionTitle, &metadata, &rank,
+			&record.ID, &record.DocumentID, &record.ChunkIndex, &record.TextContent, &record.ContentHash, &record.TotalChars,
+			&record.LineStart, &record.LineEnd, &record.SectionNum, &record.SectionTitle, &metadata, &rank,
 		)
 		if err != nil {
 			return nil, err
 		}
 		if metadata.Valid {
-			r.Metadata = metadata.String
+			record.Metadata = metadata.String
 		}
 		results = append(results, &FTSResult{
-			Chunk: &r,
+			Chunk: &record,
 			Rank:  rank,
 		})
 	}
@@ -413,20 +413,20 @@ type DBStats struct {
 }
 
 // GetStats returns summary statistics from the database.
-func (f *FTSDatabase) GetStats() (*DBStats, error) {
+func (fts *FTSDatabase) GetStats() (*DBStats, error) {
 	stats := &DBStats{
 		DocsPerCollection: make(map[string]int64),
 	}
 
 	// Total files
-	err := f.db.QueryRow("SELECT COUNT(*) FROM files").Scan(&stats.TotalFiles)
+	err := fts.db.QueryRow("SELECT COUNT(*) FROM files").Scan(&stats.TotalFiles)
 	if err != nil {
 		util.Logger.Error().Err(err).Msg("failed to count files")
 		return nil, err
 	}
 
 	// Total chunks
-	err = f.db.QueryRow("SELECT COUNT(*) FROM chunks").Scan(&stats.TotalChunks)
+	err = fts.db.QueryRow("SELECT COUNT(*) FROM chunks").Scan(&stats.TotalChunks)
 	if err != nil {
 		util.Logger.Error().Err(err).Msg("failed to count chunks")
 		return nil, err
@@ -434,7 +434,7 @@ func (f *FTSDatabase) GetStats() (*DBStats, error) {
 
 	// Total characters (sum of total_chars in chunks)
 	var totalChars sql.NullInt64
-	err = f.db.QueryRow("SELECT SUM(total_chars) FROM chunks").Scan(&totalChars)
+	err = fts.db.QueryRow("SELECT SUM(total_chars) FROM chunks").Scan(&totalChars)
 	if err != nil {
 		util.Logger.Error().Err(err).Msg("failed to sum total chars")
 		return nil, err
@@ -442,7 +442,7 @@ func (f *FTSDatabase) GetStats() (*DBStats, error) {
 	stats.TotalChars = totalChars.Int64
 
 	// Collections count and documents per collection
-	rows, err := f.db.Query("SELECT collection, COUNT(*) FROM documents GROUP BY collection")
+	rows, err := fts.db.Query("SELECT collection, COUNT(*) FROM documents GROUP BY collection")
 	if err != nil {
 		util.Logger.Error().Err(err).Msg("failed to query documents per collection")
 		return nil, err

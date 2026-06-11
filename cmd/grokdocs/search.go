@@ -63,17 +63,17 @@ var searchCmd = &cobra.Command{
 		}
 
 		util.Logger.Info().Int("count", len(results)).Str("query", query).Msg("search results")
-		for idx, res := range results {
+		for idx, result := range results {
 			var filePath string
-			_ = db.DB().QueryRow("SELECT f.file_path FROM files f JOIN documents d ON f.id = d.file_id WHERE d.id = ?", res.Chunk.DocumentID).Scan(&filePath)
+			_ = db.DB().QueryRow("SELECT f.file_path FROM files f JOIN documents d ON f.id = d.file_id WHERE d.id = ?", result.Chunk.DocumentID).Scan(&filePath)
 
 			// Try to read lines from file if exists, fallback to database cached chunk text
 			fullPath := filepath.Join(proj.RootPath, filePath)
-			fileLines, err := readLinesOfFile(fullPath, res.Chunk.LineStart, res.Chunk.LineEnd)
+			fileLines, err := readLinesOfFile(fullPath, result.Chunk.LineStart, result.Chunk.LineEnd)
 			if err == nil {
-				util.Logger.Info().Int("idx", idx+1).Str("file", filePath).Int("lines_start", res.Chunk.LineStart).Int("lines_end", res.Chunk.LineEnd).Str("section", res.Chunk.SectionTitle).Float64("score", res.Rank).Msg(fileLines)
+				util.Logger.Info().Int("idx", idx+1).Str("file", filePath).Int("lines_start", result.Chunk.LineStart).Int("lines_end", result.Chunk.LineEnd).Str("section", result.Chunk.SectionTitle).Float64("score", result.Rank).Msg(fileLines)
 			} else {
-				util.Logger.Info().Int("idx", idx+1).Str("file", filePath).Int("lines_start", res.Chunk.LineStart).Int("lines_end", res.Chunk.LineEnd).Str("section", res.Chunk.SectionTitle).Float64("score", res.Rank).Msg(res.Chunk.TextContent)
+				util.Logger.Info().Int("idx", idx+1).Str("file", filePath).Int("lines_start", result.Chunk.LineStart).Int("lines_end", result.Chunk.LineEnd).Str("section", result.Chunk.SectionTitle).Float64("score", result.Rank).Msg(result.Chunk.TextContent)
 			}
 		}
 	},

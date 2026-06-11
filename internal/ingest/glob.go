@@ -36,9 +36,9 @@ func matchGlobParts(pathParts, patParts []string) bool {
 		return allDoubleStar(patParts)
 	}
 
-	p := patParts[0]
+	part := patParts[0]
 
-	if p == "**" {
+	if part == "**" {
 		for i := 0; i <= len(pathParts); i++ {
 			if matchGlobParts(pathParts[i:], patParts[1:]) {
 				return true
@@ -47,7 +47,7 @@ func matchGlobParts(pathParts, patParts []string) bool {
 		return false
 	}
 
-	matched, err := filepath.Match(p, pathParts[0])
+	matched, err := filepath.Match(part, pathParts[0])
 	if err != nil || !matched {
 		return false
 	}

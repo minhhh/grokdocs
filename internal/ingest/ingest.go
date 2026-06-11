@@ -133,10 +133,10 @@ func walkFiles(ctx context.Context, collectionRoot string, filter *fileFilter) <
 				return nil
 			}
 
-			rel, _ := filepath.Rel(collectionRoot, absPath)
+			relPath, _ := filepath.Rel(collectionRoot, absPath)
 
 			if info.IsDir() {
-				prefix := rel
+				prefix := relPath
 				if prefix != "." {
 					prefix += "/"
 				}
@@ -147,19 +147,19 @@ func walkFiles(ctx context.Context, collectionRoot string, filter *fileFilter) <
 				}
 
 				for _, pattern := range filter.exclude {
-					if matchGlob(rel, pattern) {
+					if matchGlob(relPath, pattern) {
 						return filepath.SkipDir
 					}
 				}
 				return nil
 			}
 
-			if !filter.Match(rel) {
+			if !filter.Match(relPath) {
 				return nil
 			}
 
 			select {
-			case ch <- WalkResult{AbsPath: absPath, RelPath: rel}:
+			case ch <- WalkResult{AbsPath: absPath, RelPath: relPath}:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -208,19 +208,19 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 	)
 
 	g, ctx := errgroup.WithContext(context.Background())
-	sem := make(chan struct{}, DefaultConcurrency)
+	semaphore := make(chan struct{}, DefaultConcurrency)
 
-	for r := range walkFiles(ctx, absCollectionPath, fileFilter) {
-		if r.Err != nil {
+	for walkResult := range walkFiles(ctx, absCollectionPath, fileFilter) {
+		if walkResult.Err != nil {
 			continue
 		}
 
 		// Make path project-root-relative for storage and parser resolution
-		relPath := filepath.Join(cfg.Path, r.RelPath)
+		relPath := filepath.Join(cfg.Path, walkResult.RelPath)
 
-		sem <- struct{}{}
+		semaphore <- struct{}{}
 		g.Go(func() error {
-			defer func() { <-sem }()
+			defer func() { <-semaphore }()
 
 			select {
 			case <-ctx.Done():
@@ -242,7 +242,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 			seenFiles[relPath] = true
 			seenMu.Unlock()
 
-			state, hash, err := ingestFile(db, relPath, r.AbsPath, collectionName, parserName, proj.Config)
+			state, hash, err := ingestFile(db, relPath, walkResult.AbsPath, collectionName, parserName, proj.Config)
 			if err != nil {
 				return err
 			}
@@ -261,8 +261,8 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 			resultMu.Unlock()
 
 			if progress != nil {
-				count := atomic.AddInt32(&processedCount, 1)
-				progress <- SyncProgress{FilesProcessed: int(count), Phase: "Processing"}
+				currentCount := atomic.AddInt32(&processedCount, 1)
+				progress <- SyncProgress{FilesProcessed: int(currentCount), Phase: "Processing"}
 			}
 
 			return nil
@@ -278,22 +278,22 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 		return SyncResult{}, err
 	}
 
-	for _, fi := range dbFiles {
+	for _, collectionFile := range dbFiles {
 		seenMu.Lock()
-		_, ok := seenFiles[fi.Path]
+		_, ok := seenFiles[collectionFile.Path]
 		seenMu.Unlock()
 		if !ok {
 			resultMu.Lock()
-			if destState, isMoved := newFileHashes[fi.Hash]; isMoved {
+			if destState, isMoved := newFileHashes[collectionFile.Hash]; isMoved {
 				result.Moved++
-				movedToState[fi.Hash] = destState
+				movedToState[collectionFile.Hash] = destState
 			} else {
 				result.Deleted++
 			}
 			resultMu.Unlock()
 
-			if err := db.DeleteFile(fi.ID); err != nil {
-				util.Logger.Error().Err(err).Str("path", fi.Path).Int64("id", fi.ID).Msg("failed to delete file record")
+			if err := db.DeleteFile(collectionFile.ID); err != nil {
+				util.Logger.Error().Err(err).Str("path", collectionFile.Path).Int64("id", collectionFile.ID).Msg("failed to delete file record")
 				return SyncResult{}, err
 			}
 		}
@@ -301,8 +301,8 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 
 	// Deduct moved-to files from Added/Modified so each old file maps to
 	// exactly one state.
-	for _, s := range movedToState {
-		switch s {
+	for _, state := range movedToState {
+		switch state {
 		case FileAdded:
 			result.Added--
 		case FileModified:
@@ -401,7 +401,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 		}
 	}
 
-	p, ok := parser.GetParser(parserName)
+	docParser, ok := parser.GetParser(parserName)
 	if !ok {
 		util.Logger.Error().Str("parser", parserName).Msg("parser not found in registry")
 		return FileUnchanged, "", errors.New("parser not found")
@@ -409,7 +409,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 
 	util.Logger.Debug().Str("path", relPath).Str("parser", parserName).Msg("Ingesting file")
 
-	parsedDoc, err := p.Parse(relPath, content, size)
+	parsedDoc, err := docParser.Parse(relPath, content, size)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", relPath).Str("parser", parserName).Msg("failed to parse file")
 		return FileUnchanged, "", err
@@ -514,17 +514,17 @@ func (f *fileFilter) Match(path string) bool {
 }
 
 func computeSHA256(filePath string) (string, error) {
-	f, err := os.Open(filePath)
+	file, err := os.Open(filePath)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer file.Close()
 
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return fmt.Sprintf("%x", hasher.Sum(nil)), nil
 }
 
 

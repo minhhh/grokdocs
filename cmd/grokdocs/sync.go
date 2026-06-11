@@ -68,9 +68,9 @@ var syncCmd = &cobra.Command{
 			go func() {
 				defer wg.Done()
 				var finalCount int
-				for p := range progress {
-					bar.Add(p.FilesProcessed - finalCount)
-					finalCount = p.FilesProcessed
+				for progressUpdate := range progress {
+					bar.Add(progressUpdate.FilesProcessed - finalCount)
+					finalCount = progressUpdate.FilesProcessed
 				}
 				bar.ChangeMax(finalCount)
 				bar.Set(finalCount)

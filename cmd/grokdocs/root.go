@@ -25,14 +25,14 @@ var rootCmd = &cobra.Command{
 	Long:    `grokdocs is a local-first search engine that indexes your Markdown and code files for semantic and full-text search.`,
 	Version: version,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		var fmtVal util.LogFormat
+		var logFormatVal util.LogFormat
 		if strings.ToLower(logFormat) == "json" {
-			fmtVal = util.FormatJSON
+			logFormatVal = util.FormatJSON
 		} else {
-			fmtVal = util.FormatText
+			logFormatVal = util.FormatText
 		}
 
-		util.InitLogger(os.Stderr, verbose, fmtVal)
+		util.InitLogger(os.Stderr, verbose, logFormatVal)
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.Help()
