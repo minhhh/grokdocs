@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,17 +12,15 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gomantics/chunkx"
-	"github.com/gomantics/chunkx/languages"
 	"github.com/minhhh/grokdocs/internal/config"
+	"github.com/minhhh/grokdocs/internal/parser"
 	"github.com/minhhh/grokdocs/internal/project"
 	"github.com/minhhh/grokdocs/internal/util"
 	"golang.org/x/sync/errgroup"
 )
 
 const (
-	DefaultChunkMaxSize  = 500
-	DefaultConcurrency   = 4
+	DefaultConcurrency = 4
 )
 
 // defaultIncludeList contains glob patterns used when a collection has no
@@ -147,231 +144,6 @@ func walkFiles(ctx context.Context, collectionRoot string, filter *fileFilter) <
 	return ch
 }
 
-// SectionHeader represents a parsed Markdown section header.
-type SectionHeader struct {
-	Title      string
-	LineNumber int
-}
-
-// ParsedDocument contains document slug, metadata JSON string, and chunks.
-type ParsedDocument struct {
-	Slug     string
-	Metadata string // JSON-encoded string
-	Chunks   []*project.ChunkRecord
-}
-
-// Parser defines the behavior for a parser implementation.
-type Parser interface {
-	Parse(relPath string, content string, fileSize int64) (*ParsedDocument, error)
-}
-
-// Global registry of parsers
-var parserRegistry = make(map[string]Parser)
-
-func RegisterParser(name string, p Parser) {
-	parserRegistry[name] = p
-}
-
-func GetParser(name string) (Parser, bool) {
-	p, ok := parserRegistry[name]
-	return p, ok
-}
-
-// ChunkxParser wraps the gomantics/chunkx AST-based library.
-type ChunkxParser struct {
-	DefaultLanguage languages.LanguageName
-}
-
-func (cp *ChunkxParser) Parse(relPath string, content string, fileSize int64) (*ParsedDocument, error) {
-	var lang languages.LanguageName
-	if config, ok := languages.DetectLanguage(relPath); ok {
-		lang = config.Name
-	} else {
-		lang = cp.DefaultLanguage
-	}
-
-	chunker := chunkx.NewChunker()
-	var cxChunks []chunkx.Chunk
-	var err error
-
-	if lang != "" {
-		cxChunks, err = chunker.Chunk(
-			content,
-			chunkx.WithLanguage(lang),
-			chunkx.WithMaxSize(DefaultChunkMaxSize),
-		)
-	} else {
-		cxChunks, err = chunker.Chunk(
-			content,
-			chunkx.WithMaxSize(DefaultChunkMaxSize),
-		)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	headers := parseHeaders(content)
-
-	var chunks []*project.ChunkRecord
-	for i, cx := range cxChunks {
-		sectionTitle := ""
-		sectionNum := 0
-		for idx, h := range headers {
-			if h.LineNumber <= cx.StartLine {
-				sectionTitle = h.Title
-				sectionNum = idx + 1
-			}
-		}
-
-		sum := sha256.Sum256([]byte(cx.Content))
-		chunkHash := fmt.Sprintf("%x", sum)
-
-		metaMap := map[string]any{
-			"filename":      filepath.Base(relPath),
-			"section_num":   sectionNum,
-			"section_title": sectionTitle,
-		}
-		metaBytes, _ := json.Marshal(metaMap)
-
-		chunks = append(chunks, &project.ChunkRecord{
-			ChunkIndex:   i,
-			TextContent:  cx.Content,
-			ContentHash:  chunkHash,
-			TotalChars:   int64(len(cx.Content)),
-			LineStart:    cx.StartLine,
-			LineEnd:      cx.EndLine,
-			SectionNum:   sectionNum,
-			SectionTitle: sectionTitle,
-			Metadata:     string(metaBytes),
-		})
-	}
-
-	docMetadata := map[string]any{
-		"path": relPath,
-		"size": fileSize,
-	}
-	docMetaBytes, _ := json.Marshal(docMetadata)
-
-	return &ParsedDocument{
-		Slug:     strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath)),
-		Metadata: string(docMetaBytes),
-		Chunks:   chunks,
-	}, nil
-}
-
-func init() {
-	RegisterParser("markdown", &ChunkxParser{DefaultLanguage: languages.Markdown})
-	RegisterParser("chunkx", &ChunkxParser{})
-}
-
-// Match priority ranking
-type MatchPriority int
-
-const (
-	PriorityNone MatchPriority = iota
-	PriorityWildcard
-	PriorityExtension
-	PriorityComplexExtension
-	PriorityExactFile
-)
-
-func getMatchPriority(pattern string) MatchPriority {
-	// Exact filename matches (no wildcards, doesn't start with dot)
-	if !strings.HasPrefix(pattern, ".") && !strings.ContainsAny(pattern, "*?[]") {
-		return PriorityExactFile
-	}
-	// Complex extension (starts with dot, contains multiple dots like .rfc.md)
-	if strings.HasPrefix(pattern, ".") && strings.Count(pattern, ".") > 1 {
-		return PriorityComplexExtension
-	}
-	// Simple extension (starts with dot, one dot like .md)
-	if strings.HasPrefix(pattern, ".") && strings.Count(pattern, ".") == 1 {
-		return PriorityExtension
-	}
-	// General wildcard/glob pattern (contains *, ?, etc. like *.md or **/test.md)
-	return PriorityWildcard
-}
-
-func matchesPattern(path string, pattern string) bool {
-	base := filepath.Base(path)
-	patternLower := strings.ToLower(pattern)
-	pathLower := strings.ToLower(path)
-	baseLower := strings.ToLower(base)
-
-	// 1. Extension or complex extension match (starts with a dot)
-	if strings.HasPrefix(patternLower, ".") {
-		return strings.HasSuffix(pathLower, patternLower)
-	}
-
-	// 2. Wildcard/Glob match
-	if strings.ContainsAny(patternLower, "*?[]") {
-		matched, err := filepath.Match(patternLower, baseLower)
-		return err == nil && matched
-	}
-
-	// 3. Exact filename match
-	return baseLower == patternLower
-}
-
-// defaultParserMapping maps file extensions to parser names when no
-// collection-level parsers are configured.
-var defaultParserMapping = map[string]string{
-	".md":       "markdown",
-	".markdown": "markdown",
-}
-
-func ResolveParserName(cfg *config.Config, collectionName string, path string) (string, bool) {
-	if cfg == nil {
-		return "", false
-	}
-	collCfg, ok := cfg.Collections[collectionName]
-	if !ok {
-		return "", false
-	}
-
-	type matchCandidate struct {
-		pattern    string
-		parserName string
-		priority   MatchPriority
-	}
-
-	var candidates []matchCandidate
-
-	// Check collection-level parsers
-	for pattern, parserName := range collCfg.Parsers {
-		if matchesPattern(path, pattern) {
-			candidates = append(candidates, matchCandidate{
-				pattern:    pattern,
-				parserName: parserName,
-				priority:   getMatchPriority(pattern),
-			})
-		}
-	}
-
-	if len(candidates) == 0 {
-		// Fall back to default parser mapping when no collection-level parsers match
-		if parserName, ok := defaultParserMapping[filepath.Ext(path)]; ok {
-			return parserName, true
-		}
-		return "", false
-	}
-
-	// Find the best candidate
-	best := candidates[0]
-	for _, c := range candidates[1:] {
-		if c.priority > best.priority {
-			best = c
-		} else if c.priority == best.priority {
-			// If priority is equal, pick the one with longer pattern length (more specific)
-			if len(c.pattern) > len(best.pattern) {
-				best = c
-			}
-		}
-	}
-
-	return best.parserName, true
-}
-
 func SyncCollection(proj *project.Project, collectionName string) error {
 	cfg, ok := proj.Config.Collections[collectionName]
 	if !ok {
@@ -424,11 +196,11 @@ func SyncCollection(proj *project.Project, collectionName string) error {
 			default:
 			}
 
-			parserName, ok := ResolveParserName(proj.Config, collectionName, relPath)
+			parserName, ok := parser.ResolveParserName(proj.Config, collectionName, relPath)
 			if !ok {
 				return nil
 			}
-			if _, registered := GetParser(parserName); !registered {
+			if _, registered := parser.GetParser(parserName); !registered {
 				return nil
 			}
 
@@ -570,7 +342,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 		}
 	}
 
-	parser, ok := GetParser(parserName)
+	p, ok := parser.GetParser(parserName)
 	if !ok {
 		util.Logger.Error().Str("parser", parserName).Msg("parser not found in registry")
 		return errors.New("parser not found")
@@ -578,7 +350,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 
 	util.Logger.Info().Str("path", relPath).Str("parser", parserName).Msg("Ingesting file")
 
-	parsedDoc, err := parser.Parse(relPath, content, size)
+	parsedDoc, err := p.Parse(relPath, content, size)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", relPath).Str("parser", parserName).Msg("failed to parse file")
 		return err
@@ -696,25 +468,4 @@ func computeSHA256(filePath string) (string, error) {
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
-func parseHeaders(content string) []SectionHeader {
-	lines := strings.Split(content, "\n")
-	var headers []SectionHeader
-	for i, line := range lines {
-		lineNum := i + 1
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") {
-			hCount := 0
-			for hCount < len(trimmed) && trimmed[hCount] == '#' {
-				hCount++
-			}
-			if hCount < len(trimmed) && (trimmed[hCount] == ' ' || trimmed[hCount] == '\t') {
-				title := strings.TrimSpace(trimmed[hCount:])
-				headers = append(headers, SectionHeader{
-					Title:      title,
-					LineNumber: lineNum,
-				})
-			}
-		}
-	}
-	return headers
-}
+

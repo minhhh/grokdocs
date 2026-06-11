@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/minhhh/grokdocs/internal/config"
+	"github.com/minhhh/grokdocs/internal/parser"
 	"github.com/minhhh/grokdocs/internal/project"
 	"golang.org/x/sync/errgroup"
 )
@@ -108,7 +109,7 @@ This is the configuration section.
 Here is some config text.
 `
 
-	p, ok := GetParser("markdown")
+	p, ok := parser.GetParser("markdown")
 	if !ok {
 		t.Fatal("markdown parser not registered")
 	}
@@ -597,31 +598,31 @@ func TestParserResolutionAndPrecedence(t *testing.T) {
 	}
 
 	// 1. Specific filename takes highest priority
-	pName, ok := ResolveParserName(cfg, "default", "path/to/hello.md")
+	pName, ok := parser.ResolveParserName(cfg, "default", "path/to/hello.md")
 	if !ok || pName != "hello-parser" {
 		t.Errorf("expected hello-parser, got %s (ok=%t)", pName, ok)
 	}
 
 	// 2. Complex extension matches next
-	pName, ok = ResolveParserName(cfg, "default", "path/to/doc.rfc.md")
+	pName, ok = parser.ResolveParserName(cfg, "default", "path/to/doc.rfc.md")
 	if !ok || pName != "rfc-parser" {
 		t.Errorf("expected rfc-parser, got %s (ok=%t)", pName, ok)
 	}
 
 	// 3. Simple extension matches next
-	pName, ok = ResolveParserName(cfg, "default", "path/to/other.md")
+	pName, ok = parser.ResolveParserName(cfg, "default", "path/to/other.md")
 	if !ok || pName != "markdown" {
 		t.Errorf("expected markdown, got %s (ok=%t)", pName, ok)
 	}
 
 	// 4. Wildcard/glob pattern matches
-	pName, ok = ResolveParserName(cfg, "default", "path/to/script.js")
+	pName, ok = parser.ResolveParserName(cfg, "default", "path/to/script.js")
 	if !ok || pName != "javascript-parser" {
 		t.Errorf("expected javascript-parser, got %s (ok=%t)", pName, ok)
 	}
 
 	// 5. Unmatched file
-	_, ok = ResolveParserName(cfg, "default", "path/to/style.css")
+	_, ok = parser.ResolveParserName(cfg, "default", "path/to/style.css")
 	if ok {
 		t.Errorf("expected no match for style.css")
 	}
