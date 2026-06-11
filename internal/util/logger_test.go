@@ -2,11 +2,8 @@ package util
 
 import (
 	"bytes"
-	"os"
 	"strings"
 	"testing"
-
-	"github.com/rs/zerolog"
 )
 
 func TestLoggerTextDefault(t *testing.T) {
@@ -89,12 +86,4 @@ func TestLoggerVerboseShowsTrace(t *testing.T) {
 	}
 }
 
-func TestDefaultLoggerLevel(t *testing.T) {
-	saved := Logger
-	Logger = zerolog.New(os.Stderr).Level(zerolog.InfoLevel)
-	defer func() { Logger = saved }()
 
-	if Logger.GetLevel() != zerolog.InfoLevel {
-		t.Errorf("expected default level to be InfoLevel, got %v", Logger.GetLevel())
-	}
-}

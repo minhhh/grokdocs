@@ -8,20 +8,13 @@ import (
 	"github.com/minhhh/grokdocs/internal/config"
 )
 
-func TestRootDiscovery(t *testing.T) {
-	// Create a temporary directory structure
-	tmpDir, err := os.MkdirTemp("", "grokdocs-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
+func TestRootDiscoveryFallsBackToStartDir(t *testing.T) {
+	tmpDir := t.TempDir()
 	subDir := filepath.Join(tmpDir, "nested", "sub", "dir")
 	if err := os.MkdirAll(subDir, 0755); err != nil {
 		t.Fatalf("failed to create nested dirs: %v", err)
 	}
 
-	// 1. If startDir has no .grokdocs in parents, it should return startDir as root.
 	proj, err := FindProject(subDir)
 	if err != nil {
 		t.Fatalf("FindProject failed: %v", err)
@@ -30,30 +23,32 @@ func TestRootDiscovery(t *testing.T) {
 	if proj.RootPath != absSubDir {
 		t.Errorf("expected fallback root path %q, got %q", absSubDir, proj.RootPath)
 	}
+}
 
-	// 2. Create .grokdocs directory in tmpDir
+func TestRootDiscoveryFindsMarkerInAncestor(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "nested", "sub", "dir")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatalf("failed to create nested dirs: %v", err)
+	}
+
 	grokDir := filepath.Join(tmpDir, ConfigDirName)
 	if err := os.Mkdir(grokDir, 0755); err != nil {
 		t.Fatalf("failed to create .grokdocs: %v", err)
 	}
 
-	// 3. Now FindProject from subDir should find the root at tmpDir
-	proj2, err := FindProject(subDir)
+	proj, err := FindProject(subDir)
 	if err != nil {
 		t.Fatalf("FindProject failed: %v", err)
 	}
 	absTmpDir, _ := filepath.Abs(tmpDir)
-	if proj2.RootPath != absTmpDir {
-		t.Errorf("expected root path %q, got %q", absTmpDir, proj2.RootPath)
+	if proj.RootPath != absTmpDir {
+		t.Errorf("expected root path %q, got %q", absTmpDir, proj.RootPath)
 	}
 }
 
 func TestProjectInitializationAndLoading(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "grokdocs-init-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	proj, err := NewProject(tmpDir)
 	if err != nil {
@@ -207,11 +202,7 @@ func TestInitFailsOnInvalidRootPath(t *testing.T) {
 }
 
 func TestDatabasesLifecycle(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "grokdocs-db-lifecycle-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	proj, err := NewProject(tmpDir)
 	if err != nil {
@@ -225,12 +216,12 @@ func TestDatabasesLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFTS failed: %v", err)
 	}
-	if fts.db == nil {
+	if fts.DB() == nil {
 		t.Fatalf("expected sql.DB to be initialized")
 	}
 
 	// Ping to verify database works
-	if err := fts.db.Ping(); err != nil {
+	if err := fts.DB().Ping(); err != nil {
 		t.Fatalf("sqlite ping failed: %v", err)
 	}
 
@@ -248,27 +239,29 @@ func TestDatabasesLifecycle(t *testing.T) {
 		t.Fatalf("expected vector index file to exist: %v", err)
 	}
 
-	// 3. Close databases
+	// Close databases
 	if err := proj.Close(); err != nil {
 		t.Fatalf("proj.Close() failed: %v", err)
 	}
 
-	// Verify connections are cleared
-	if proj.ftsDB != nil || proj.vectorDB != nil {
-		t.Errorf("expected db handles to be nil after Close")
+	// Verify old handles are closed
+	if err := fts.DB().Ping(); err == nil {
+		t.Error("expected old FTS handle to be closed after proj.Close()")
 	}
 }
 
 func TestSQLiteDatabase(t *testing.T) {
-	// Initialize an in-memory database to test FTSDatabase logic cleanly and quickly
-	db, err := OpenFTSDatabase(":memory:")
+	tmpDir := t.TempDir()
+	proj, err := NewProject(tmpDir)
 	if err != nil {
-		t.Fatalf("failed to open in-memory db: %v", err)
+		t.Fatalf("NewProject failed: %v", err)
 	}
-	defer db.Close()
-
-	if err := db.InitSchema(); err != nil {
-		t.Fatalf("InitSchema failed: %v", err)
+	if err := proj.Init(); err != nil {
+		t.Fatalf("proj.Init() failed: %v", err)
+	}
+	db, err := proj.OpenFTS()
+	if err != nil {
+		t.Fatalf("OpenFTS failed: %v", err)
 	}
 
 	// 1. Insert file
@@ -463,15 +456,19 @@ func TestSQLiteDatabase(t *testing.T) {
 }
 
 func TestGetStats(t *testing.T) {
-	db, err := OpenFTSDatabase(":memory:")
+	tmpDir := t.TempDir()
+	proj, err := NewProject(tmpDir)
 	if err != nil {
-		t.Fatalf("failed to open in-memory db: %v", err)
+		t.Fatalf("NewProject failed: %v", err)
 	}
-	defer db.Close()
-
-	if err := db.InitSchema(); err != nil {
-		t.Fatalf("InitSchema failed: %v", err)
+	if err := proj.Init(); err != nil {
+		t.Fatalf("proj.Init() failed: %v", err)
 	}
+	db, err := proj.OpenFTS()
+	if err != nil {
+		t.Fatalf("OpenFTS failed: %v", err)
+	}
+	defer proj.Close()
 
 	// Stats on empty database
 	stats, err := db.GetStats()

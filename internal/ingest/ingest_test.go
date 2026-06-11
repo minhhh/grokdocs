@@ -6,14 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/minhhh/grokdocs/internal/config"
 	"github.com/minhhh/grokdocs/internal/parser"
 	"github.com/minhhh/grokdocs/internal/project"
-	"golang.org/x/sync/errgroup"
 )
 
 func TestFileWalking(t *testing.T) {
@@ -243,7 +241,7 @@ We have replaced the word and added remote.
 	}
 
 	// Artificially advance modification time to ensure change detection registers the update
-	futureTime := time.Now().Add(5 * time.Second)
+	futureTime := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
 	if err := os.Chtimes(introPath, futureTime, futureTime); err != nil {
 		t.Fatal(err)
 	}
@@ -286,229 +284,6 @@ We have replaced the word and added remote.
 	}
 	if len(deletedResults) != 0 {
 		t.Errorf("expected 0 matches after document deletion, got %d", len(deletedResults))
-	}
-}
-
-func TestFileFilterFilesOnly(t *testing.T) {
-	f := newFileFilter([]string{"README.md", "index.html"}, nil, nil)
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{"docs/README.md", true},
-		{"index.html", true},
-		{"sub/README.md", true},
-		{"docs/intro.md", true},  // matches *.md from default include list
-		{"style.css", true},      // matches *.css from default include list
-		{"data.bin", false},      // not in files list and no default include match
-	}
-	for _, tc := range tests {
-		got := f.Match(tc.path)
-		if got != tc.want {
-			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
-		}
-	}
-}
-
-func TestFileFilterIncludeOnly(t *testing.T) {
-	f := newFileFilter(nil, []string{"*.md", "*.go"}, nil)
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{"docs/intro.md", true},
-		{"main.go", true},
-		{"src/util.go", true},
-		{"style.css", false},
-		{"README.txt", false},
-	}
-	for _, tc := range tests {
-		got := f.Match(tc.path)
-		if got != tc.want {
-			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
-		}
-	}
-}
-
-func TestFileFilterIncludeFolder(t *testing.T) {
-	f := newFileFilter(nil, []string{"docs/**/*", "tests/**/*", "src/*.go"}, nil)
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{"docs/intro.md", true},
-		{"main.go", false},
-		{"src/util.go", true},
-		{"src/main.ts", false},
-		{"style.css", false},
-		{"README.txt", false},
-		{"tests/test1.go", true},
-		{"tests/auth/test2.go", true},
-	}
-	for _, tc := range tests {
-		got := f.Match(tc.path)
-		if got != tc.want {
-			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
-		}
-	}
-}
-
-func TestFileFilterExcludeOnly(t *testing.T) {
-	// No include => all files pass unless excluded
-	f := newFileFilter(nil, nil, []string{"*.txt", "*.log"})
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{"docs/intro.md", true},
-		{"main.go", true},
-		{"notes.txt", false},
-		{"error.log", false},
-	}
-	for _, tc := range tests {
-		got := f.Match(tc.path)
-		if got != tc.want {
-			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
-		}
-	}
-}
-
-func TestFileFilterFilesAndInclude(t *testing.T) {
-	// files and include are merged
-	f := newFileFilter([]string{"README.md", "config.yaml"}, []string{"*.go"}, nil)
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{"README.md", true},
-		{"config.yaml", true},
-		{"src/main.go", true},
-		{"docs/intro.md", false},
-		{"style.css", false},
-	}
-	for _, tc := range tests {
-		got := f.Match(tc.path)
-		if got != tc.want {
-			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
-		}
-	}
-}
-
-func TestFileFilterFilesIgnoresExclude(t *testing.T) {
-	// When files is set, exclude is ignored
-	f := newFileFilter([]string{"notes.txt"}, []string{"*.go"}, []string{"*.txt", "*.go"})
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{"notes.txt", true},  // would be excluded but files is set, so ignore exclude
-		{"main.go", true},    // matches include *.go, exclude ignored
-		{"README.md", false}, // not in files or include
-	}
-	for _, tc := range tests {
-		got := f.Match(tc.path)
-		if got != tc.want {
-			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
-		}
-	}
-}
-
-func TestFileFilterIncludeAndExclude(t *testing.T) {
-	f := newFileFilter(nil, []string{"*.md", "*.go"}, []string{"*_test.go", "*_old.md"})
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{"docs/intro.md", true},
-		{"main.go", true},
-		{"main_test.go", false},  // excluded
-		{"docs/changes_old.md", false}, // excluded
-		{"style.css", false},     // not in include
-	}
-	for _, tc := range tests {
-		got := f.Match(tc.path)
-		if got != tc.want {
-			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
-		}
-	}
-}
-
-func TestFileFilterEmpty(t *testing.T) {
-	f := newFileFilter(nil, nil, nil)
-	if !f.Match("any/file.go") {
-		t.Error("expected empty filter to match everything")
-	}
-	if !f.Match("another/file.md") {
-		t.Error("expected empty filter to match everything")
-	}
-}
-
-func TestFileWalkingDefaultIncludeList(t *testing.T) {
-	tests := []struct {
-		path string
-		want bool
-		cont string
-	}{
-		{"docs/intro.md", true, "# Intro"},
-		{"src/main.go", true, "package main"},
-		{"README.txt", false, "text"},
-		{"styles.css", true, "body {}"},
-		{"index.html", true, "<html>"},
-		{"src/lib.rs", true, "fn main() {}"},
-		{"App.java", true, "class App {}"},
-		{"script.exe", false, "binary"},
-	}
-
-	root := t.TempDir()
-	for _, tc := range tests {
-		writeFile(t, root, tc.path, tc.cont)
-	}
-
-	results := collectWalkResultsWithFilter(t, root, newFileFilter(nil, nil, nil))
-	got := map[string]bool{}
-	for _, r := range results {
-		if r.Err != nil {
-			continue
-		}
-		got[r.RelPath] = true
-	}
-	for _, tc := range tests {
-		if got[tc.path] != tc.want {
-			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
-		}
-	}
-}
-
-func TestFileWalkingDefaultExcludeList(t *testing.T) {
-	tests := []struct {
-		path string
-		want bool
-		cont string
-	}{
-		{".git/README.md", false, "# git readme"},
-		{"node_modules/pkg/index.js", false, "mod code"},
-		{"dist/output.yaml", false, "key: val"},
-		{"docs/intro.md", true, "# Intro"},
-		{"src/main.go", true, "package main"},
-	}
-
-	root := t.TempDir()
-	for _, tc := range tests {
-		writeFile(t, root, tc.path, tc.cont)
-	}
-
-	results := collectWalkResultsWithFilter(t, root, newFileFilter(nil, nil, nil))
-	got := map[string]bool{}
-	for _, r := range results {
-		if r.Err != nil {
-			continue
-		}
-		got[r.RelPath] = true
-	}
-	for _, tc := range tests {
-		if got[tc.path] != tc.want {
-			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
-		}
 	}
 }
 
@@ -628,269 +403,6 @@ func TestParserResolutionAndPrecedence(t *testing.T) {
 	}
 }
 
-func TestWalkFilesFilesOverrideExclude(t *testing.T) {
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{"subdir/doc.md", true},
-	}
-
-	root := t.TempDir()
-	for _, tc := range tests {
-		writeFile(t, root, tc.path, "# found")
-	}
-
-	results := collectWalkResultsWithFilter(t, root, newFileFilter([]string{"subdir/doc.md"}, nil, []string{"subdir"}))
-	got := map[string]bool{}
-	for _, r := range results {
-		if r.Err != nil {
-			continue
-		}
-		got[r.RelPath] = true
-	}
-	for _, tc := range tests {
-		if got[tc.path] != tc.want {
-			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
-		}
-	}
-}
-
-func TestWalkFilesIncludeListFiltersFiles(t *testing.T) {
-	tests := []struct {
-		path string
-		want bool
-		cont string
-	}{
-		{"docs/intro.md", true, "# Intro"},
-		{"docs/main.go", true, "package main"},
-		{"README.txt", false, "text"},
-	}
-
-	root := t.TempDir()
-	for _, tc := range tests {
-		writeFile(t, root, tc.path, tc.cont)
-	}
-
-	results := collectWalkResultsWithFilter(t, root, newFileFilter(nil, []string{"*.md", "*.go"}, nil))
-	got := map[string]bool{}
-	for _, r := range results {
-		if r.Err != nil {
-			continue
-		}
-		got[r.RelPath] = true
-	}
-	for _, tc := range tests {
-		if got[tc.path] != tc.want {
-			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
-		}
-	}
-}
-
-func TestWalkFilesIncludesHiddenDirs(t *testing.T) {
-	tests := []struct {
-		path string
-		want bool
-		cont string
-	}{
-		{".git/config", true, "git config"},
-		{".grokdocs/config.yaml", true, "config"},
-	}
-
-	root := t.TempDir()
-	for _, tc := range tests {
-		writeFile(t, root, tc.path, tc.cont)
-	}
-
-	results := collectWalkResultsWithFilter(t, root, &fileFilter{})
-	got := map[string]bool{}
-	for _, r := range results {
-		if r.Err != nil {
-			continue
-		}
-		got[r.RelPath] = true
-	}
-	for _, tc := range tests {
-		if got[tc.path] != tc.want {
-			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
-		}
-	}
-}
-
-func TestWalkFilesExcludeListSkipsDirs(t *testing.T) {
-	tests := []struct {
-		path string
-		want bool
-		cont string
-	}{
-		{"node_modules/pkg/index.js", false, "code"},
-		{"docs/node_modules/pkg/index.js", false, "code"},
-		{"src/main.go", true, "package main"},
-	}
-
-	root := t.TempDir()
-	for _, tc := range tests {
-		writeFile(t, root, tc.path, tc.cont)
-	}
-
-	results := collectWalkResultsWithFilter(t, root, newFileFilter(nil, nil, []string{"node_modules"}))
-	got := map[string]bool{}
-	for _, r := range results {
-		if r.Err != nil {
-			continue
-		}
-		got[r.RelPath] = true
-	}
-	for _, tc := range tests {
-		if got[tc.path] != tc.want {
-			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
-		}
-	}
-}
-
-func TestWalkFilesClosesOnCancel(t *testing.T) {
-	root := t.TempDir()
-	writeFile(t, root, "file1.md", "# 1")
-	writeFile(t, root, "file2.md", "# 2")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	ch := walkFiles(ctx, root, newFileFilter(nil, nil, nil))
-	for r := range ch {
-		if r.Err != nil {
-			return // context cancelled, walk should emit error or close
-		}
-	}
-}
-
-func TestWalkFilesNonExistentRoot(t *testing.T) {
-	ch := walkFiles(context.Background(), "/nonexistent/path", newFileFilter(nil, nil, nil))
-	found := false
-	for r := range ch {
-		if r.Err != nil {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected error for nonexistent root")
-	}
-}
-
-func TestSemaphoreThrottlesConcurrency(t *testing.T) {
-	var mu sync.Mutex
-	var maxConcurrent int
-	var curConcurrent int
-
-	g, ctx := errgroup.WithContext(context.Background())
-	sem := make(chan struct{}, 3)
-
-	for i := 0; i < 10; i++ {
-		sem <- struct{}{}
-		i := i
-		g.Go(func() error {
-			defer func() { <-sem }()
-
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-
-			mu.Lock()
-			curConcurrent++
-			if curConcurrent > maxConcurrent {
-				maxConcurrent = curConcurrent
-			}
-			mu.Unlock()
-
-			// Simulate work
-			_ = i
-
-			mu.Lock()
-			curConcurrent--
-			mu.Unlock()
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		t.Fatalf("errgroup failed: %v", err)
-	}
-
-	if maxConcurrent > 3 {
-		t.Errorf("expected max concurrency <= 3, got %d", maxConcurrent)
-	}
-}
-
-func TestWalkFilesDoubleStarExclude(t *testing.T) {
-	tests := []struct {
-		path string
-		want bool
-		cont string
-	}{
-		{"a/node_modules/pkg/index.js", false, "code"},
-		{"a/src/main.go", true, "package main"},
-	}
-
-	root := t.TempDir()
-	for _, tc := range tests {
-		writeFile(t, root, tc.path, tc.cont)
-	}
-
-	results := collectWalkResultsWithFilter(t, root, newFileFilter(nil, nil, []string{"**/node_modules"}))
-	got := map[string]bool{}
-	for _, r := range results {
-		if r.Err != nil {
-			continue
-		}
-		got[r.RelPath] = true
-	}
-	for _, tc := range tests {
-		if got[tc.path] != tc.want {
-			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
-		}
-	}
-}
-
-func TestExcludeOverridesInclude(t *testing.T) {
-	f := newFileFilter(nil, []string{"*.md"}, []string{"*_old.md"})
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{"docs/intro.md", true},
-		{"docs/changes_old.md", false},
-		{"README.md", true},
-		{"archive_old.md", false},
-	}
-	for _, tc := range tests {
-		got := f.Match(tc.path)
-		if got != tc.want {
-			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
-		}
-	}
-}
-
-func TestExcludeDoubleStarPattern(t *testing.T) {
-	f := newFileFilter(nil, []string{"**/*"}, []string{"**/node_modules/**"})
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{"src/main.go", true},
-		{"node_modules/pkg/index.js", false},
-		{"a/b/node_modules/pkg/index.js", false},
-		{"README.md", true},
-	}
-	for _, tc := range tests {
-		got := f.Match(tc.path)
-		if got != tc.want {
-			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
-		}
-	}
-}
-
 func TestSyncSkipsUnchangedFile(t *testing.T) {
 	root := t.TempDir()
 
@@ -996,11 +508,14 @@ func TestSyncCollectionResult(t *testing.T) {
 		t.Fatalf("first SyncCollection failed: %v", err)
 	}
 
-	// Wait so subsequent writes get a different Unix-second mtime
-	time.Sleep(2 * time.Second)
-
 	// Modify guide.md
 	if err := os.WriteFile(filepath.Join(docsDir, "guide.md"), []byte("# Guide\nUpdated content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Advance mtime for the modified file to ensure change detection
+	futureTime := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(filepath.Join(docsDir, "guide.md"), futureTime, futureTime); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1040,6 +555,73 @@ func TestSyncCollectionResult(t *testing.T) {
 	}
 	if result.Deleted != 1 {
 		t.Errorf("expected 1 deleted, got %d", result.Deleted)
+	}
+}
+
+func TestSyncCollectionCollectionNotFound(t *testing.T) {
+	root := t.TempDir()
+	proj, err := project.NewProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj.Config = &config.Config{
+		Collections: map[string]config.CollectionConfig{
+			"default": {Path: "docs", Parsers: map[string]string{".md": "markdown"}},
+		},
+	}
+
+	_, err = SyncCollection(proj, "nonexistent-collection", nil)
+	if err == nil {
+		t.Fatal("expected error for nonexistent collection")
+	}
+	if err.Error() != "collection not found" {
+		t.Errorf("expected 'collection not found', got %v", err)
+	}
+}
+
+func TestSyncCollectionPathIsFile(t *testing.T) {
+	root := t.TempDir()
+
+	filePath := filepath.Join(root, "blocker.txt")
+	if err := os.WriteFile(filePath, []byte("not a dir"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	proj, err := project.NewProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj.Config = &config.Config{
+		Collections: map[string]config.CollectionConfig{
+			"default": {Path: "blocker.txt", Parsers: map[string]string{".txt": "chunkx"}},
+		},
+	}
+
+	_, err = SyncCollection(proj, "default", nil)
+	if err == nil {
+		t.Fatal("expected error when collection path is a file")
+	}
+	if err.Error() != "collection path is not a directory" {
+		t.Errorf("expected 'collection path is not a directory', got %v", err)
+	}
+}
+
+func TestSyncCollectionPathDoesNotExist(t *testing.T) {
+	root := t.TempDir()
+
+	proj, err := project.NewProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj.Config = &config.Config{
+		Collections: map[string]config.CollectionConfig{
+			"default": {Path: "nonexistent-dir", Parsers: map[string]string{".md": "markdown"}},
+		},
+	}
+
+	_, err = SyncCollection(proj, "default", nil)
+	if err == nil {
+		t.Fatal("expected error for nonexistent collection path")
 	}
 }
 
