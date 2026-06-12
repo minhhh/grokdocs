@@ -83,6 +83,10 @@ var searchCmd = &cobra.Command{
 			groups[pr.filePath] = append(groups[pr.filePath], pr.result)
 		}
 
+		if len(order) > searchLimit {
+			order = order[:searchLimit]
+		}
+
 		for file_group_order, fp := range order {
 			fmt.Printf("\n[%d] %s: - %d chunks\n", file_group_order+1, fp, len(groups[fp]))
 			for i, result := range groups[fp] {
