@@ -24,6 +24,13 @@ const (
 	DefaultConcurrency = 4
 )
 
+func makeSlug(collectionName, relPath string) string {
+	s := collectionName + "--" + relPath
+	s = strings.ReplaceAll(s, "/", "--")
+	s = strings.ReplaceAll(s, ".", "-")
+	return s
+}
+
 // defaultIncludeList contains glob patterns used when a collection has no
 // explicit include or files field. These match common documentation and
 // source file extensions by basename (e.g. *.md matches intro.md in any dir).
@@ -397,7 +404,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 			docRecord = &project.DocumentRecord{
 				FileID:     fileRecord.ID,
 				Collection: collectionName,
-				Slug:       strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath)),
+				Slug:       makeSlug(collectionName, relPath),
 				ChunkCount: 0,
 				TotalChars: 0,
 			}
@@ -426,11 +433,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 		return FileUnchanged, "", err
 	}
 
-	slug := parsedDoc.Slug
-	if slug == "" {
-		slug = strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
-	}
-	docRecord.Slug = slug
+	docRecord.Slug = makeSlug(collectionName, relPath)
 	docRecord.ChunkCount = len(parsedDoc.Chunks)
 	docRecord.TotalChars = int64(len(content))
 	docRecord.Metadata = parsedDoc.Metadata
@@ -443,6 +446,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 	for i, chunk := range parsedDoc.Chunks {
 		chunk.DocumentID = docRecord.ID
 		chunk.ChunkIndex = i
+		chunk.Slug = fmt.Sprintf("%s--%d", docRecord.Slug, i)
 		if err := db.SaveChunk(chunk); err != nil {
 			util.Logger.Error().Err(err).Str("path", relPath).Int("chunk_idx", i).Msg("failed to save chunk")
 			return FileUnchanged, "", err

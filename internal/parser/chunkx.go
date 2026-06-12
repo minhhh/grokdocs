@@ -12,6 +12,34 @@ import (
 	"github.com/minhhh/grokdocs/internal/project"
 )
 
+type sectionHeader struct {
+	Title      string
+	LineNumber int
+}
+
+func parseHeaders(content string) []sectionHeader {
+	lines := strings.Split(content, "\n")
+	var headers []sectionHeader
+	for i, line := range lines {
+		lineNum := i + 1
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			headingLevel := 0
+			for headingLevel < len(trimmed) && trimmed[headingLevel] == '#' {
+				headingLevel++
+			}
+			if headingLevel < len(trimmed) && (trimmed[headingLevel] == ' ' || trimmed[headingLevel] == '\t') {
+				title := strings.TrimSpace(trimmed[headingLevel:])
+				headers = append(headers, sectionHeader{
+					Title:      title,
+					LineNumber: lineNum,
+				})
+			}
+		}
+	}
+	return headers
+}
+
 // ChunkxParser wraps the gomantics/chunkx AST-based library.
 type ChunkxParser struct {
 	DefaultLanguage languages.LanguageName
@@ -34,11 +62,13 @@ func (cp *ChunkxParser) Parse(relPath string, content string, fileSize int64) (*
 			content,
 			chunkx.WithLanguage(lang),
 			chunkx.WithMaxSize(DefaultChunkMaxSize),
+			chunkx.WithOverlap(DefaultChunkOverlap),
 		)
 	} else {
 		cxChunks, err = chunker.Chunk(
 			content,
 			chunkx.WithMaxSize(DefaultChunkMaxSize),
+			chunkx.WithOverlap(DefaultChunkOverlap),
 		)
 	}
 	if err != nil {

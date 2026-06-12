@@ -9,12 +9,7 @@ import (
 )
 
 const DefaultChunkMaxSize = 500
-
-// SectionHeader represents a parsed Markdown section header.
-type SectionHeader struct {
-	Title      string
-	LineNumber int
-}
+const DefaultChunkOverlap = 10
 
 // ParsedDocument contains document slug, metadata JSON string, and chunks.
 type ParsedDocument struct {
@@ -40,28 +35,7 @@ func GetParser(name string) (Parser, bool) {
 	return p, ok
 }
 
-func parseHeaders(content string) []SectionHeader {
-	lines := strings.Split(content, "\n")
-	var headers []SectionHeader
-	for i, line := range lines {
-		lineNum := i + 1
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") {
-			headingLevel := 0
-			for headingLevel < len(trimmed) && trimmed[headingLevel] == '#' {
-				headingLevel++
-			}
-			if headingLevel < len(trimmed) && (trimmed[headingLevel] == ' ' || trimmed[headingLevel] == '\t') {
-				title := strings.TrimSpace(trimmed[headingLevel:])
-				headers = append(headers, SectionHeader{
-					Title:      title,
-					LineNumber: lineNum,
-				})
-			}
-		}
-	}
-	return headers
-}
+
 
 // Match priority ranking
 type MatchPriority int

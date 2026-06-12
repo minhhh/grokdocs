@@ -46,6 +46,7 @@ const (
 			line_end INTEGER NOT NULL,
 			section_num INTEGER NOT NULL,
 			section_title TEXT NOT NULL,
+			slug TEXT NOT NULL DEFAULT '',
 			metadata TEXT,
 			FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
 		);
@@ -99,13 +100,21 @@ type ChunkRecord struct {
 	LineEnd      int
 	SectionNum   int
 	SectionTitle string
+	Slug         string
 	Metadata     string // JSON-encoded string
 }
 
-// FTSResult wraps a matching chunk record and its BM25 rank score from SQLite.
+// FTSResult contains all matching chunk fields plus its BM25 rank score from SQLite.
 type FTSResult struct {
-	Chunk *ChunkRecord
-	Rank  float64
+	ID           int64 // maps 1-to-1 to FAISS index IDs
+	DocumentID   int64
+	ChunkIndex   int
+	LineStart    int
+	LineEnd      int
+	SectionTitle string
+	Slug         string
+	Snippet      string
+	Rank         float64
 }
 
 // OpenFTSDatabase opens (and initializes if necessary) the SQLite database.
@@ -249,6 +258,15 @@ func (fts *FTSDatabase) GetDocument(fileID int64, collection string) (*DocumentR
 	return &record, nil
 }
 
+// GetFilePathByDocumentID retrieves the file path for a given document ID.
+func (fts *FTSDatabase) GetFilePathByDocumentID(documentID int64) (string, error) {
+	var filePath string
+	err := fts.db.QueryRow(
+		"SELECT f.file_path FROM files f JOIN documents d ON f.id = d.file_id WHERE d.id = ?", documentID,
+	).Scan(&filePath)
+	return filePath, err
+}
+
 // SaveDocument inserts or updates a document map.
 func (fts *FTSDatabase) SaveDocument(doc *DocumentRecord) error {
 	var metadata any = nil
@@ -285,7 +303,7 @@ func (fts *FTSDatabase) SaveDocument(doc *DocumentRecord) error {
 // GetChunksForDocument retrieves all chunks for a document in order.
 func (fts *FTSDatabase) GetChunksForDocument(docID int64) ([]*ChunkRecord, error) {
 	rows, err := fts.db.Query(`
-		SELECT id, document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, metadata
+		SELECT id, document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, slug, metadata
 		FROM chunks WHERE document_id = ? ORDER BY chunk_index ASC`, docID)
 	if err != nil {
 		return nil, err
@@ -298,7 +316,7 @@ func (fts *FTSDatabase) GetChunksForDocument(docID int64) ([]*ChunkRecord, error
 		var metadata sql.NullString
 		err := rows.Scan(
 			&record.ID, &record.DocumentID, &record.ChunkIndex, &record.TextContent, &record.ContentHash, &record.TotalChars,
-			&record.LineStart, &record.LineEnd, &record.SectionNum, &record.SectionTitle, &metadata,
+			&record.LineStart, &record.LineEnd, &record.SectionNum, &record.SectionTitle, &record.Slug, &metadata,
 		)
 		if err != nil {
 			return nil, err
@@ -320,10 +338,10 @@ func (fts *FTSDatabase) SaveChunk(chunk *ChunkRecord) error {
 
 	if chunk.ID == 0 {
 		result, err := fts.db.Exec(`
-			INSERT INTO chunks (document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, metadata)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			INSERT INTO chunks (document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, slug, metadata)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			chunk.DocumentID, chunk.ChunkIndex, chunk.TextContent, chunk.ContentHash, chunk.TotalChars,
-			chunk.LineStart, chunk.LineEnd, chunk.SectionNum, chunk.SectionTitle, metadata,
+			chunk.LineStart, chunk.LineEnd, chunk.SectionNum, chunk.SectionTitle, chunk.Slug, metadata,
 		)
 		if err != nil {
 			return err
@@ -336,10 +354,10 @@ func (fts *FTSDatabase) SaveChunk(chunk *ChunkRecord) error {
 	} else {
 		_, err := fts.db.Exec(`
 			UPDATE chunks
-			SET document_id = ?, chunk_index = ?, text_content = ?, content_hash = ?, total_chars = ?, line_start = ?, line_end = ?, section_num = ?, section_title = ?, metadata = ?
+			SET document_id = ?, chunk_index = ?, text_content = ?, content_hash = ?, total_chars = ?, line_start = ?, line_end = ?, section_num = ?, section_title = ?, slug = ?, metadata = ?
 			WHERE id = ?`,
 			chunk.DocumentID, chunk.ChunkIndex, chunk.TextContent, chunk.ContentHash, chunk.TotalChars,
-			chunk.LineStart, chunk.LineEnd, chunk.SectionNum, chunk.SectionTitle, metadata, chunk.ID,
+			chunk.LineStart, chunk.LineEnd, chunk.SectionNum, chunk.SectionTitle, chunk.Slug, metadata, chunk.ID,
 		)
 		if err != nil {
 			return err
@@ -357,7 +375,7 @@ func (fts *FTSDatabase) DeleteChunksForDocument(docID int64) error {
 // SearchFTS queries the FTS5 virtual table for matching text and returns matching chunks + FTS BM25 rank score.
 func (fts *FTSDatabase) SearchFTS(queryText string, collection string, limit int) ([]*FTSResult, error) {
 	sqlQuery := `
-		SELECT c.id, c.document_id, c.chunk_index, c.text_content, c.content_hash, c.total_chars, c.line_start, c.line_end, c.section_num, c.section_title, c.metadata, f.rank
+		SELECT c.id, c.document_id, c.chunk_index, c.line_start, c.line_end, c.section_title, c.slug, snippet(chunks_fts, 0, '', '', '...', 5), f.rank
 		FROM chunks c
 		JOIN documents d ON c.document_id = d.id
 		JOIN chunks_fts f ON c.id = f.rowid
@@ -382,23 +400,20 @@ func (fts *FTSDatabase) SearchFTS(queryText string, collection string, limit int
 
 	var results []*FTSResult
 	for rows.Next() {
-		var record ChunkRecord
-		var rank float64
-		var metadata sql.NullString
+		var r FTSResult
+		var snippet sql.NullString
 		err := rows.Scan(
-			&record.ID, &record.DocumentID, &record.ChunkIndex, &record.TextContent, &record.ContentHash, &record.TotalChars,
-			&record.LineStart, &record.LineEnd, &record.SectionNum, &record.SectionTitle, &metadata, &rank,
+			&r.ID, &r.DocumentID, &r.ChunkIndex,
+			&r.LineStart, &r.LineEnd, &r.SectionTitle, &r.Slug, &snippet, &r.Rank,
 		)
 		if err != nil {
 			return nil, err
 		}
-		if metadata.Valid {
-			record.Metadata = metadata.String
+		r.Rank = -r.Rank
+		if snippet.Valid {
+			r.Snippet = snippet.String
 		}
-		results = append(results, &FTSResult{
-			Chunk: &record,
-			Rank:  rank,
-		})
+		results = append(results, &r)
 	}
 	return results, nil
 }

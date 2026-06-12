@@ -2,8 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/minhhh/grokdocs/internal/project"
@@ -52,28 +52,42 @@ var searchCmd = &cobra.Command{
 		}
 		defer proj.Close()
 
-		results, err := db.SearchFTS(query, searchCollection, searchLimit)
+		results, err := db.SearchFTS(query, searchCollection, searchLimit * 5)
 		if err != nil {
 			os.Exit(1)
 		}
 
 		if len(results) == 0 {
-			util.Logger.Info().Msg("No matches found.")
+			fmt.Println("No matches found.")
 			return
 		}
 
-		util.Logger.Info().Int("count", len(results)).Str("query", query).Msg("search results")
-		for idx, result := range results {
-			var filePath string
-			_ = db.DB().QueryRow("SELECT f.file_path FROM files f JOIN documents d ON f.id = d.file_id WHERE d.id = ?", result.Chunk.DocumentID).Scan(&filePath)
+		// First pass: collect file_path for each result
+		type pathResult struct {
+			filePath string
+			result   *project.FTSResult
+		}
+		enriched := make([]pathResult, len(results))
+		for i, result := range results {
+			filePath, _ := db.GetFilePathByDocumentID(result.DocumentID)
+			enriched[i] = pathResult{filePath: filePath, result: result}
+		}
 
-			// Try to read lines from file if exists, fallback to database cached chunk text
-			fullPath := filepath.Join(proj.RootPath, filePath)
-			fileLines, err := readLinesOfFile(fullPath, result.Chunk.LineStart, result.Chunk.LineEnd)
-			if err == nil {
-				util.Logger.Info().Int("idx", idx+1).Str("file", filePath).Int("lines_start", result.Chunk.LineStart).Int("lines_end", result.Chunk.LineEnd).Str("section", result.Chunk.SectionTitle).Float64("score", result.Rank).Msg(fileLines)
-			} else {
-				util.Logger.Info().Int("idx", idx+1).Str("file", filePath).Int("lines_start", result.Chunk.LineStart).Int("lines_end", result.Chunk.LineEnd).Str("section", result.Chunk.SectionTitle).Float64("score", result.Rank).Msg(result.Chunk.TextContent)
+		// Group by file_path, preserving rank order within each file
+		groups := make(map[string][]*project.FTSResult)
+		order := []string{}
+		for _, pr := range enriched {
+			if _, ok := groups[pr.filePath]; !ok {
+				order = append(order, pr.filePath)
+			}
+			groups[pr.filePath] = append(groups[pr.filePath], pr.result)
+		}
+
+		for file_group_order, fp := range order {
+			fmt.Printf("\n[%d] %s: - %d chunks\n", file_group_order+1, fp, len(groups[fp]))
+			for i, result := range groups[fp] {
+				fmt.Printf("  [%d] %s [L%d-L%d] - score: %f\n", i+1, result.Slug, result.LineStart, result.LineEnd, result.Rank)
+				fmt.Printf("  %s\n", result.Snippet)
 			}
 		}
 	},

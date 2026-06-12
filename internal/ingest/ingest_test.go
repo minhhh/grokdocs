@@ -226,8 +226,8 @@ We hope you enjoy searching locally and offline.
 	if len(results) != 1 {
 		t.Fatalf("expected exactly 1 search match, got %d", len(results))
 	}
-	if !strings.Contains(results[0].Chunk.TextContent, "offline") {
-		t.Errorf("expected chunk to contain 'offline', got: %q", results[0].Chunk.TextContent)
+	if !strings.Contains(results[0].Snippet, "offline") {
+		t.Errorf("expected snippet to contain 'offline', got: %q", results[0].Snippet)
 	}
 
 	// Verification of file update and incremental sync

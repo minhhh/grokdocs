@@ -330,6 +330,7 @@ func TestSQLiteDatabase(t *testing.T) {
 		LineEnd:      5,
 		SectionNum:   1,
 		SectionTitle: "Introduction",
+		Slug:         "default--docs--intro-md--0",
 		Metadata:     `{"importance":"high"}`,
 	}
 	chunk2 := &ChunkRecord{
@@ -342,6 +343,7 @@ func TestSQLiteDatabase(t *testing.T) {
 		LineEnd:      10,
 		SectionNum:   2,
 		SectionTitle: "Architecture",
+		Slug:         "default--docs--intro-md--1",
 		Metadata:     `{"importance":"medium"}`,
 	}
 
@@ -394,21 +396,16 @@ func TestSQLiteDatabase(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result matching 'semantic', got %d", len(results))
 	}
-	if results[0].Chunk.ID != chunk1.ID {
-		t.Errorf("expected chunk1 id %d, got %d", chunk1.ID, results[0].Chunk.ID)
+	if results[0].ID != chunk1.ID {
+		t.Errorf("expected chunk1 id %d, got %d", chunk1.ID, results[0].ID)
 	}
-	if results[0].Chunk.TotalChars != 49 {
-		t.Errorf("expected chunk TotalChars 49, got %d", results[0].Chunk.TotalChars)
+	if results[0].LineStart != 1 || results[0].LineEnd != 5 {
+		t.Errorf("expected line range 1-5, got %d-%d", results[0].LineStart, results[0].LineEnd)
 	}
-	if results[0].Chunk.LineStart != 1 || results[0].Chunk.LineEnd != 5 {
-		t.Errorf("expected line range 1-5, got %d-%d", results[0].Chunk.LineStart, results[0].Chunk.LineEnd)
+	if results[0].SectionTitle != "Introduction" {
+		t.Errorf("expected section 'Introduction', got %q", results[0].SectionTitle)
 	}
-	if results[0].Chunk.SectionNum != 1 || results[0].Chunk.SectionTitle != "Introduction" {
-		t.Errorf("expected section 1 'Introduction', got %d %q", results[0].Chunk.SectionNum, results[0].Chunk.SectionTitle)
-	}
-	if results[0].Chunk.Metadata != `{"importance":"high"}` {
-		t.Errorf("expected metadata %q, got %q", `{"importance":"high"}`, results[0].Chunk.Metadata)
-	}
+
 
 	// Test FTS search with collection filter
 	noResults, err := db.SearchFTS("semantic", "nonexistent-collection", 10)
@@ -508,6 +505,7 @@ func TestGetStats(t *testing.T) {
 		TextContent: "hello world notes",
 		ContentHash: "hash-c1",
 		TotalChars:  17,
+		Slug:        "",
 	}
 	if err := db.SaveChunk(chunk1); err != nil {
 		t.Fatalf("failed to save chunk: %v", err)
@@ -541,6 +539,7 @@ func TestGetStats(t *testing.T) {
 		TextContent: "hello wiki first chunk",
 		ContentHash: "hash-c2a",
 		TotalChars:  22,
+		Slug:        "",
 	}
 	chunk2b := &ChunkRecord{
 		DocumentID:  doc2.ID,
@@ -548,6 +547,7 @@ func TestGetStats(t *testing.T) {
 		TextContent: "hello wiki second chunk",
 		ContentHash: "hash-c2b",
 		TotalChars:  23,
+		Slug:        "",
 	}
 	if err := db.SaveChunk(chunk2a); err != nil {
 		t.Fatalf("failed to save chunk: %v", err)
