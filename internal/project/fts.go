@@ -366,6 +366,33 @@ func (fts *FTSDatabase) SaveChunk(chunk *ChunkRecord) error {
 	return nil
 }
 
+// SaveChunksBatch saves all chunks in a single transaction.
+func (fts *FTSDatabase) SaveChunksBatch(chunks []*ChunkRecord) error {
+	tx, err := fts.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, chunk := range chunks {
+		var metadata any = nil
+		if chunk.Metadata != "" {
+			metadata = chunk.Metadata
+		}
+		_, err := tx.Exec(`
+			INSERT INTO chunks (document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, slug, metadata)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			chunk.DocumentID, chunk.ChunkIndex, chunk.TextContent, chunk.ContentHash, chunk.TotalChars,
+			chunk.LineStart, chunk.LineEnd, chunk.SectionNum, chunk.SectionTitle, chunk.Slug, metadata,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
 // DeleteChunksForDocument deletes all chunks for a document.
 func (fts *FTSDatabase) DeleteChunksForDocument(docID int64) error {
 	_, err := fts.db.Exec("DELETE FROM chunks WHERE document_id = ?", docID)
@@ -375,7 +402,7 @@ func (fts *FTSDatabase) DeleteChunksForDocument(docID int64) error {
 // SearchFTS queries the FTS5 virtual table for matching text and returns matching chunks + FTS BM25 rank score.
 func (fts *FTSDatabase) SearchFTS(queryText string, collection string, limit int) ([]*FTSResult, error) {
 	sqlQuery := `
-		SELECT c.id, c.document_id, c.chunk_index, c.line_start, c.line_end, c.section_title, c.slug, snippet(chunks_fts, 0, '', '', '...', 5), f.rank
+		SELECT c.id, c.document_id, c.chunk_index, c.line_start, c.line_end, c.section_title, c.slug, snippet(chunks_fts, 0, '', '', '...', 5), -f.rank AS rank
 		FROM chunks c
 		JOIN documents d ON c.document_id = d.id
 		JOIN chunks_fts f ON c.id = f.rowid
@@ -409,7 +436,6 @@ func (fts *FTSDatabase) SearchFTS(queryText string, collection string, limit int
 		if err != nil {
 			return nil, err
 		}
-		r.Rank = -r.Rank
 		if snippet.Valid {
 			r.Snippet = snippet.String
 		}

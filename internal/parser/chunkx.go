@@ -92,9 +92,7 @@ func (cp *ChunkxParser) Parse(relPath string, content string, fileSize int64) (*
 		chunkHash := fmt.Sprintf("%x", checksum)
 
 		metaMap := map[string]any{
-			"filename":      filepath.Base(relPath),
-			"section_num":   sectionNum,
-			"section_title": sectionTitle,
+			"filename": filepath.Base(relPath),
 		}
 		metaBytes, _ := json.Marshal(metaMap)
 
@@ -118,7 +116,6 @@ func (cp *ChunkxParser) Parse(relPath string, content string, fileSize int64) (*
 	docMetaBytes, _ := json.Marshal(docMetadata)
 
 	return &ParsedDocument{
-		Slug:     strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath)),
 		Metadata: string(docMetaBytes),
 		Chunks:   chunks,
 	}, nil

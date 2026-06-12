@@ -12,9 +12,10 @@ import (
 )
 
 var (
-	searchCollection string
-	searchMode       string
-	searchLimit      int
+	searchCollection       string
+	searchMode             string
+	searchLimit            int
+	searchGroupMultiplier  = 5
 )
 
 var searchCmd = &cobra.Command{
@@ -52,7 +53,7 @@ var searchCmd = &cobra.Command{
 		}
 		defer proj.Close()
 
-		results, err := db.SearchFTS(query, searchCollection, searchLimit * 5)
+		results, err := db.SearchFTS(query, searchCollection, searchLimit * searchGroupMultiplier)
 		if err != nil {
 			os.Exit(1)
 		}
@@ -67,10 +68,14 @@ var searchCmd = &cobra.Command{
 			filePath string
 			result   *project.FTSResult
 		}
-		enriched := make([]pathResult, len(results))
-		for i, result := range results {
-			filePath, _ := db.GetFilePathByDocumentID(result.DocumentID)
-			enriched[i] = pathResult{filePath: filePath, result: result}
+		enriched := make([]pathResult, 0, len(results))
+		for _, result := range results {
+			filePath, err := db.GetFilePathByDocumentID(result.DocumentID)
+			if err != nil {
+				util.Logger.Warn().Err(err).Int64("document_id", result.DocumentID).Msg("skipping result: failed to resolve file path")
+				continue
+			}
+			enriched = append(enriched, pathResult{filePath: filePath, result: result})
 		}
 
 		// Group by file_path, preserving rank order within each file
@@ -88,7 +93,7 @@ var searchCmd = &cobra.Command{
 		}
 
 		for file_group_order, fp := range order {
-			fmt.Printf("\n[%d] %s: - %d chunks\n", file_group_order+1, fp, len(groups[fp]))
+			fmt.Printf("\n[%d] %s - %d chunks\n", file_group_order+1, fp, len(groups[fp]))
 			for i, result := range groups[fp] {
 				fmt.Printf("  [%d] %s [L%d-L%d] - score: %f\n", i+1, result.Slug, result.LineStart, result.LineEnd, result.Rank)
 				fmt.Printf("  %s\n", result.Snippet)

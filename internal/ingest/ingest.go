@@ -447,10 +447,11 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 		chunk.DocumentID = docRecord.ID
 		chunk.ChunkIndex = i
 		chunk.Slug = fmt.Sprintf("%s--%d", docRecord.Slug, i)
-		if err := db.SaveChunk(chunk); err != nil {
-			util.Logger.Error().Err(err).Str("path", relPath).Int("chunk_idx", i).Msg("failed to save chunk")
-			return FileUnchanged, "", err
-		}
+	}
+
+	if err := db.SaveChunksBatch(parsedDoc.Chunks); err != nil {
+		util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to save chunks")
+		return FileUnchanged, "", err
 	}
 
 	return fileState, hash, nil
