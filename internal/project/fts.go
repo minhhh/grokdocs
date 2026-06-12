@@ -2,6 +2,7 @@ package project
 
 import (
 	"database/sql"
+	"sync"
 
 	"github.com/minhhh/grokdocs/internal/util"
 	_ "github.com/mattn/go-sqlite3"
@@ -11,6 +12,7 @@ import (
 type FTSDatabase struct {
 	Path string
 	db   *sql.DB
+	mu   sync.Mutex
 }
 
 const (
@@ -140,6 +142,8 @@ func OpenFTSDatabase(dbPath string) (*FTSDatabase, error) {
 
 // Close closes the SQLite database connection.
 func (fts *FTSDatabase) Close() error {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	if fts.db != nil {
 		return fts.db.Close()
 	}
@@ -153,6 +157,8 @@ func (fts *FTSDatabase) DB() *sql.DB {
 
 // InitSchema initializes database tables, FTS5 virtual table, and triggers.
 func (fts *FTSDatabase) InitSchema() error {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	if _, err := fts.db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
 		util.Logger.Error().Err(err).Msg("failed to enable foreign keys")
 		return err
@@ -166,6 +172,8 @@ func (fts *FTSDatabase) InitSchema() error {
 
 // GetFile retrieves file metadata by path. Returns sql.ErrNoRows if not found.
 func (fts *FTSDatabase) GetFile(filePath string) (*FileRecord, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	row := fts.db.QueryRow(`
 		SELECT id, file_path, filename, size, modified_at, content_hash
 		FROM files WHERE file_path = ?`, filePath)
@@ -178,6 +186,8 @@ func (fts *FTSDatabase) GetFile(filePath string) (*FileRecord, error) {
 
 // SaveFile inserts or updates a file.
 func (fts *FTSDatabase) SaveFile(file *FileRecord) error {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	if file.ID == 0 {
 		result, err := fts.db.Exec(`
 			INSERT INTO files (file_path, filename, size, modified_at, content_hash)
@@ -213,6 +223,8 @@ type CollectionFile struct {
 
 // ListCollectionFiles returns all files belonging to a collection.
 func (fts *FTSDatabase) ListCollectionFiles(collectionName string) ([]CollectionFile, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	rows, err := fts.db.Query(`
 		SELECT f.id, f.file_path, f.content_hash
 		FROM files f
@@ -238,12 +250,16 @@ func (fts *FTSDatabase) ListCollectionFiles(collectionName string) ([]Collection
 
 // DeleteFile deletes a file by ID (triggers cascading deletes to documents and chunks).
 func (fts *FTSDatabase) DeleteFile(id int64) error {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	_, err := fts.db.Exec("DELETE FROM files WHERE id = ?", id)
 	return err
 }
 
 // GetDocument retrieves document mapping by file ID and collection. Returns sql.ErrNoRows if not found.
 func (fts *FTSDatabase) GetDocument(fileID int64, collection string) (*DocumentRecord, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	row := fts.db.QueryRow(`
 		SELECT id, file_id, collection, slug, chunk_count, total_chars, metadata
 		FROM documents WHERE file_id = ? AND collection = ?`, fileID, collection)
@@ -260,6 +276,8 @@ func (fts *FTSDatabase) GetDocument(fileID int64, collection string) (*DocumentR
 
 // GetFilePathByDocumentID retrieves the file path for a given document ID.
 func (fts *FTSDatabase) GetFilePathByDocumentID(documentID int64) (string, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	var filePath string
 	err := fts.db.QueryRow(
 		"SELECT f.file_path FROM files f JOIN documents d ON f.id = d.file_id WHERE d.id = ?", documentID,
@@ -269,6 +287,8 @@ func (fts *FTSDatabase) GetFilePathByDocumentID(documentID int64) (string, error
 
 // SaveDocument inserts or updates a document map.
 func (fts *FTSDatabase) SaveDocument(doc *DocumentRecord) error {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	var metadata any = nil
 	if doc.Metadata != "" {
 		metadata = doc.Metadata
@@ -302,6 +322,8 @@ func (fts *FTSDatabase) SaveDocument(doc *DocumentRecord) error {
 
 // GetChunksForDocument retrieves all chunks for a document in order.
 func (fts *FTSDatabase) GetChunksForDocument(docID int64) ([]*ChunkRecord, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	rows, err := fts.db.Query(`
 		SELECT id, document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, slug, metadata
 		FROM chunks WHERE document_id = ? ORDER BY chunk_index ASC`, docID)
@@ -331,6 +353,8 @@ func (fts *FTSDatabase) GetChunksForDocument(docID int64) ([]*ChunkRecord, error
 
 // SaveChunk inserts or updates a text chunk.
 func (fts *FTSDatabase) SaveChunk(chunk *ChunkRecord) error {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	var metadata any = nil
 	if chunk.Metadata != "" {
 		metadata = chunk.Metadata
@@ -368,6 +392,8 @@ func (fts *FTSDatabase) SaveChunk(chunk *ChunkRecord) error {
 
 // SaveChunksBatch saves all chunks in a single transaction.
 func (fts *FTSDatabase) SaveChunksBatch(chunks []*ChunkRecord) error {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	tx, err := fts.db.Begin()
 	if err != nil {
 		return err
@@ -395,12 +421,16 @@ func (fts *FTSDatabase) SaveChunksBatch(chunks []*ChunkRecord) error {
 
 // DeleteChunksForDocument deletes all chunks for a document.
 func (fts *FTSDatabase) DeleteChunksForDocument(docID int64) error {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	_, err := fts.db.Exec("DELETE FROM chunks WHERE document_id = ?", docID)
 	return err
 }
 
 // SearchFTS queries the FTS5 virtual table for matching text and returns matching chunks + FTS BM25 rank score.
 func (fts *FTSDatabase) SearchFTS(queryText string, collection string, limit int) ([]*FTSResult, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	sqlQuery := `
 		SELECT c.id, c.document_id, c.chunk_index, c.line_start, c.line_end, c.section_title, c.slug, snippet(chunks_fts, 0, '', '', '...', 5), -f.rank AS rank
 		FROM chunks c
@@ -457,6 +487,8 @@ type DBStats struct {
 
 // GetStats returns summary statistics from the database.
 func (fts *FTSDatabase) GetStats() (*DBStats, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
 	stats := &DBStats{
 		DocsPerCollection:  make(map[string]int64),
 		ChunksPerCollection: make(map[string]int64),
