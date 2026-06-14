@@ -13,8 +13,8 @@ func TestFileFilterFilesOnly(t *testing.T) {
 		{"docs/README.md", true},
 		{"index.html", true},
 		{"sub/README.md", true},
-		{"docs/intro.md", true},
-		{"style.css", true},
+		{"docs/intro.md", false},
+		{"style.css", false},
 		{"data.bin", false},
 	}
 	for _, tc := range tests {
@@ -160,6 +160,159 @@ func TestFileFilterEmpty(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
 		}
+	}
+}
+
+func TestExtractIncludeFolders(t *testing.T) {
+	tests := []struct {
+		name     string
+		patterns []string
+		want     []string
+	}{
+		{
+			name:     "folder-prefixed pattern",
+			patterns: []string{"hello/*.md"},
+			want:     []string{"hello"},
+		},
+		{
+			name:     "nested folder",
+			patterns: []string{"src/hello/*.go"},
+			want:     []string{"src/hello"},
+		},
+		{
+			name:     "multiple folders",
+			patterns: []string{"docs/*.md", "tests/*.go"},
+			want:     []string{"docs", "tests"},
+		},
+		{
+			name:     "basename-only returns nil",
+			patterns: []string{"*.md"},
+			want:     nil,
+		},
+		{
+			name:     "mixed basename and folder returns nil",
+			patterns: []string{"*.md", "hello/*.go"},
+			want:     nil,
+		},
+		{
+			name:     "double-star after dir extracts prefix",
+			patterns: []string{"docs/**/*.md"},
+			want:     []string{"docs"},
+		},
+		{
+			name:     "baseless double-star returns nil",
+			patterns: []string{"**/*.md"},
+			want:     nil,
+		},
+		{
+			name:     "glob char in dir extracts prefix before glob",
+			patterns: []string{"src/*/file.go"},
+			want:     []string{"src"},
+		},
+		{
+			name:     "empty patterns",
+			patterns: []string{},
+			want:     nil,
+		},
+		{
+			name:     "dedup",
+			patterns: []string{"docs/one.md", "docs/two.md"},
+			want:     []string{"docs"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractIncludeFolders(tc.patterns)
+			if tc.want == nil {
+				if got != nil {
+					t.Errorf("got %v, want nil", got)
+				}
+				return
+			}
+			if len(got) != len(tc.want) {
+				t.Errorf("got %v, want %v", got, tc.want)
+				return
+			}
+			set := make(map[string]bool)
+			for _, f := range got {
+				set[f] = true
+			}
+			for _, w := range tc.want {
+				if !set[w] {
+					t.Errorf("missing folder %q in %v", w, got)
+				}
+			}
+		})
+	}
+}
+
+func TestFileFilterOnlyIncludedFolders(t *testing.T) {
+	tests := []struct {
+		name   string
+		files  []string
+		include []string
+		exclude []string
+		want   []string
+	}{
+		{
+			name:    "files set -> onlyIncludedFolders empty",
+			files:   []string{"docs/readme.md"},
+			include: nil,
+			exclude: nil,
+			want:    nil,
+		},
+		{
+			name:    "basename-only include -> empty",
+			files:   nil,
+			include: []string{"*.md"},
+			exclude: nil,
+			want:    nil,
+		},
+		{
+			name:    "folder include -> populated",
+			files:   nil,
+			include: []string{"hello/*.md"},
+			exclude: nil,
+			want:    []string{"hello"},
+		},
+		{
+			name:    "folder include with excluded folder",
+			files:   nil,
+			include: []string{"docs/*.md", "node_modules/*.js"},
+			exclude: []string{"node_modules"},
+			want:    []string{"docs"},
+		},
+		{
+			name:    "double-star after prefix extracts folder",
+			files:   nil,
+			include: []string{"workspace/**/*.md"},
+			exclude: nil,
+			want:    []string{"workspace"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFileFilter(tc.files, tc.include, tc.exclude)
+			if tc.want == nil {
+				if f.onlyIncludedFolders != nil {
+					t.Errorf("got %v, want nil", f.onlyIncludedFolders)
+				}
+				return
+			}
+			if len(f.onlyIncludedFolders) != len(tc.want) {
+				t.Errorf("got %v, want %v", f.onlyIncludedFolders, tc.want)
+				return
+			}
+			set := make(map[string]bool)
+			for _, folder := range f.onlyIncludedFolders {
+				set[folder] = true
+			}
+			for _, w := range tc.want {
+				if !set[w] {
+					t.Errorf("missing folder %q in %v", w, f.onlyIncludedFolders)
+				}
+			}
+		})
 	}
 }
 

@@ -248,6 +248,17 @@ func (fts *FTSDatabase) ListCollectionFiles(collectionName string) ([]Collection
 	return files, nil
 }
 
+// DeleteOrphanedDocuments removes documents whose file_id points to a non-existent file.
+func (fts *FTSDatabase) DeleteOrphanedDocuments(collection string) error {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
+	_, err := fts.db.Exec(
+		`DELETE FROM documents WHERE collection = ? AND file_id NOT IN (SELECT id FROM files)`,
+		collection,
+	)
+	return err
+}
+
 // DeleteFile deletes a file by ID (triggers cascading deletes to documents and chunks).
 func (fts *FTSDatabase) DeleteFile(id int64) error {
 	fts.mu.Lock()

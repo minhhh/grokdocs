@@ -241,6 +241,155 @@ func TestWalkFilesNonExistentRoot(t *testing.T) {
 	}
 }
 
+func TestWalkFilesFilesOnly(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+		cont string
+	}{
+		{"docs/intro.md", true, "# Intro"},
+		{"src/main.go", true, "package main"},
+		{"notes.md", false, "text"},
+	}
+
+	root := t.TempDir()
+	for _, tc := range tests {
+		writeFile(t, root, tc.path, tc.cont)
+	}
+
+	results := collectWalkResultsWithFilter(t, root, newFileFilter(
+		[]string{"docs/intro.md", "src/main.go"}, nil, nil,
+	))
+	got := map[string]bool{}
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		got[r.RelPath] = true
+	}
+	for _, tc := range tests {
+		if got[tc.path] != tc.want {
+			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
+		}
+	}
+}
+
+func TestWalkFilesBothFilesAndInclude(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+		cont string
+	}{
+		{"README.md", true, "# readme"},         // explicit file
+		{"docs/intro.md", true, "# Intro"},       // include *.md
+	}
+
+	root := t.TempDir()
+	for _, tc := range tests {
+		writeFile(t, root, tc.path, tc.cont)
+	}
+
+	results := collectWalkResultsWithFilter(t, root, newFileFilter(
+		[]string{"README.md"}, []string{"*.md"}, nil,
+	))
+	got := map[string]bool{}
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		got[r.RelPath] = true
+	}
+	for _, tc := range tests {
+		if got[tc.path] != tc.want {
+			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
+		}
+	}
+}
+
+func TestWalkFilesFilesAndIncludeDedup(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "docs/intro.md", "# Intro")
+	writeFile(t, root, "README.md", "# readme")
+	writeFile(t, root, "other.txt", "text")
+
+	results := collectWalkResultsWithFilter(t, root, newFileFilter(
+		[]string{"docs/intro.md", "README.md"}, []string{"*.md", "*.txt"}, nil,
+	))
+	got := map[string]int{}
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		got[r.RelPath]++
+	}
+	if got["docs/intro.md"] != 1 {
+		t.Errorf("docs/intro.md emitted %d times, want 1", got["docs/intro.md"])
+	}
+	if got["README.md"] != 1 {
+		t.Errorf("README.md emitted %d times, want 1", got["README.md"])
+	}
+	if got["other.txt"] != 1 {
+		t.Errorf("other.txt emitted %d times, want 1", got["other.txt"])
+	}
+}
+
+func TestWalkFilesFilesBasenameOnly(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "README.md", "# root readme")
+	writeFile(t, root, "a/README.md", "# nested readme")
+
+	results := collectWalkResultsWithFilter(t, root, newFileFilter(
+		[]string{"README.md"}, nil, nil,
+	))
+	got := map[string]bool{}
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		got[r.RelPath] = true
+	}
+	if !got["README.md"] {
+		t.Errorf("expected README.md at root to be emitted, got %v", got)
+	}
+	if got["a/README.md"] {
+		t.Errorf("did not expect a/README.md to be emitted")
+	}
+}
+
+func TestWalkFilesOnlyIncludedFolders(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+		cont string
+	}{
+		{"hello/world.md", true, "# hello"},             // inside target folder
+		{"hello/sub/other.md", false, "# sub"},          // */*.md doesn't match subdirs
+		{"other/file.md", false, "# other"},             // outside target folder
+		{"workspace/src/lib.md", true, "# lib"},         // ** descends into subdirs
+	}
+
+	root := t.TempDir()
+	for _, tc := range tests {
+		writeFile(t, root, tc.path, tc.cont)
+	}
+
+	results := collectWalkResultsWithFilter(t, root, newFileFilter(
+		nil, []string{"hello/*.md", "workspace/**/*.md"}, nil,
+	))
+	got := map[string]bool{}
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		got[r.RelPath] = true
+	}
+	for _, tc := range tests {
+		if got[tc.path] != tc.want {
+			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
+		}
+	}
+}
+
 func TestWalkFilesDoubleStarExclude(t *testing.T) {
 	tests := []struct {
 		path string

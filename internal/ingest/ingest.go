@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	DefaultConcurrency = 4
+	DefaultConcurrency = 10
 )
 
 func makeSlug(collectionName, relPath string) string {
@@ -107,6 +107,7 @@ const (
 type SyncProgress struct {
 	FilesProcessed int
 	Phase          string
+	TotalFiles     int
 }
 
 // SyncResult contains the final tallies from a SyncCollection run.
@@ -129,49 +130,83 @@ func walkFiles(ctx context.Context, collectionRoot string, filter *fileFilter) <
 	ch := make(chan WalkResult)
 	go func() {
 		defer close(ch)
-		filepath.Walk(collectionRoot, func(absPath string, info os.FileInfo, err error) error {
-			if err != nil {
-				util.Logger.Warn().Err(err).Str("path", absPath).Msg("walk error")
+		seen := make(map[string]bool)
+		if len(filter.include) > 0 {
+			filepath.Walk(collectionRoot, func(absPath string, info os.FileInfo, err error) error {
+				if err != nil {
+					util.Logger.Warn().Err(err).Str("path", absPath).Msg("walk error")
+					select {
+					case ch <- WalkResult{Err: err}:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					return nil
+				}
+
+				relPath, _ := filepath.Rel(collectionRoot, absPath)
+
+				if info.IsDir() {
+					if len(filter.onlyIncludedFolders) > 0 {
+						prefix := relPath
+						if prefix != "." {
+							prefix += "/"
+						}
+						keep := false
+						for _, folder := range filter.onlyIncludedFolders {
+							if relPath == "." || relPath == folder || strings.HasPrefix(relPath, folder+"/") || strings.HasPrefix(folder, prefix) {
+								keep = true
+								break
+							}
+						}
+						if !keep {
+							return filepath.SkipDir
+						}
+					}
+
+					//util.Logger.Debug().Str("path", absPath).Msg("Directory")
+					for _, pattern := range filter.exclude {
+						if matchGlob(relPath, pattern) {
+							return filepath.SkipDir
+						}
+					}
+					return nil
+				}
+
+				if !filter.Match(relPath) {
+					return nil
+				}
+
+				seen[relPath] = true
 				select {
-				case ch <- WalkResult{Err: err}:
+				case ch <- WalkResult{AbsPath: absPath, RelPath: relPath}:
 				case <-ctx.Done():
 					return ctx.Err()
 				}
 				return nil
-			}
+			})
+		}
 
-			relPath, _ := filepath.Rel(collectionRoot, absPath)
-
-			if info.IsDir() {
-				prefix := relPath
-				if prefix != "." {
-					prefix += "/"
+		if len(filter.files) > 0 {
+			for _, file := range filter.files {
+				if seen[file] {
+					continue
 				}
-				for _, f := range filter.files {
-					if strings.HasPrefix(f, prefix) {
-						return nil
-					}
+				absPath := filepath.Join(collectionRoot, filepath.FromSlash(file))
+				if fi, err := os.Stat(absPath); err != nil {
+					util.Logger.Warn().Err(err).Str("path", absPath).Msg("file not found")
+					continue
+				} else if fi.IsDir() {
+					continue
 				}
 
-				for _, pattern := range filter.exclude {
-					if matchGlob(relPath, pattern) {
-						return filepath.SkipDir
-					}
+				util.Logger.Debug().Str("path", absPath).Msg("Send to out")
+				select {
+				case ch <- WalkResult{AbsPath: absPath, RelPath: file}:
+				case <-ctx.Done():
+					return
 				}
-				return nil
 			}
-
-			if !filter.Match(relPath) {
-				return nil
-			}
-
-			select {
-			case ch <- WalkResult{AbsPath: absPath, RelPath: relPath}:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			return nil
-		})
+		}
 	}()
 	return ch
 }
@@ -217,6 +252,30 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 	g, ctx := errgroup.WithContext(context.Background())
 	semaphore := make(chan struct{}, DefaultConcurrency)
 
+	// Count total number of files
+	totalFiles := 0
+	g.Go(func() error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		count := 0
+		for wr := range walkFiles(ctx, absCollectionPath, fileFilter) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			if wr.Err != nil {
+				continue
+			}
+			count++
+		}
+		totalFiles = count
+		return nil
+	})
+
 	for walkResult := range walkFiles(ctx, absCollectionPath, fileFilter) {
 		if walkResult.Err != nil {
 			continue
@@ -249,6 +308,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 			seenFiles[relPath] = true
 			seenMu.Unlock()
 
+			util.Logger.Debug().Str("path", relPath).Msg("Ingetsing ")
 			state, hash, err := ingestFile(db, relPath, walkResult.AbsPath, collectionName, parserName, proj.Config)
 			if err != nil {
 				return err
@@ -269,7 +329,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 
 			if progress != nil {
 				currentCount := atomic.AddInt32(&processedCount, 1)
-				progress <- SyncProgress{FilesProcessed: int(currentCount), Phase: "Processing"}
+				progress <- SyncProgress{FilesProcessed: int(currentCount), Phase: "Processing", TotalFiles: totalFiles}
 			}
 
 			return nil
@@ -285,6 +345,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 		return SyncResult{}, err
 	}
 
+	util.Logger.Info().Msg("=====Cleanup ")
 	for _, collectionFile := range dbFiles {
 		seenMu.Lock()
 		_, ok := seenFiles[collectionFile.Path]
@@ -309,10 +370,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 	// Remove orphaned documents (file_id points to a file that no longer exists).
 	// This covers cases where SQLite FK cascade didn't fire (e.g. earlier runs
 	// without PRAGMA foreign_keys=ON).
-	if _, err := db.DB().Exec(
-		`DELETE FROM documents WHERE collection = ? AND file_id NOT IN (SELECT id FROM files)`,
-		collectionName,
-	); err != nil {
+	if err := db.DeleteOrphanedDocuments(collectionName); err != nil {
 		util.Logger.Error().Err(err).Str("collection", collectionName).Msg("failed to cleanup orphaned documents")
 		return SyncResult{}, err
 	}
@@ -473,19 +531,91 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 // OR if include matches. When files is not set, include acts as a whitelist
 // (if specified) and exclude as a blacklist applied after include.
 type fileFilter struct {
-	files   []string
-	include []string
-	exclude []string
+	files               []string
+	include             []string
+	exclude             []string
+	onlyIncludedFolders []string // set when we know exactly which folders to scan
 }
 
 func newFileFilter(files, include, exclude []string) *fileFilter {
 	if len(exclude) == 0 {
 		exclude = defaultExcludeList
 	}
-	if len(include) == 0 {
+	if len(include) == 0 && len(files) == 0 {
 		include = defaultIncludeList
 	}
-	return &fileFilter{files: files, include: include, exclude: exclude}
+	f := &fileFilter{files: files, include: include, exclude: exclude}
+	f.initOnlyIncludedFolders()
+	return f
+}
+
+// initOnlyIncludedFolders populates onlyIncludedFolders when we can determine
+// a restricted set of directories to walk. Not used when explicit files are
+// given — in that case we check file prefixes per-directory instead.
+func (f *fileFilter) initOnlyIncludedFolders() {
+	if len(f.files) > 0 {
+		return
+	}
+
+	folders := extractIncludeFolders(f.include)
+	if folders == nil {
+		return
+	}
+
+	set := make(map[string]bool)
+	for _, folder := range folders {
+		excluded := false
+		for _, ex := range f.exclude {
+			if matchGlob(folder, ex) {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			set[folder] = true
+		}
+	}
+
+	f.onlyIncludedFolders = make([]string, 0, len(set))
+	for folder := range set {
+		f.onlyIncludedFolders = append(f.onlyIncludedFolders, folder)
+	}
+}
+
+// extractIncludeFolders extracts directory prefixes from include patterns.
+// Returns nil if any pattern has no directory prefix (basename-only), meaning
+// we must scan everything.
+func extractIncludeFolders(patterns []string) []string {
+	var folders []string
+	set := make(map[string]bool)
+
+	for _, p := range patterns {
+		if !strings.Contains(p, "/") {
+			return nil
+		}
+
+		parts := strings.Split(p, "/")
+		var dirParts []string
+		for _, part := range parts[:len(parts)-1] {
+			if strings.ContainsAny(part, "*?[") {
+				break
+			}
+			dirParts = append(dirParts, part)
+		}
+		if len(dirParts) == 0 {
+			return nil
+		}
+		dir := strings.Join(dirParts, "/")
+		if !set[dir] {
+			set[dir] = true
+			folders = append(folders, dir)
+		}
+	}
+
+	if len(folders) == 0 {
+		return nil
+	}
+	return folders
 }
 
 func (f *fileFilter) Match(path string) bool {
