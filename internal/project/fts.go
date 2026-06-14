@@ -267,6 +267,43 @@ func (fts *FTSDatabase) DeleteFile(id int64) error {
 	return err
 }
 
+// defaultBatchSize limits how many deletes per transaction.
+const defaultBatchSize = 100
+
+// DeleteFilesBatch deletes multiple file IDs in batches of defaultBatchSize per transaction.
+func (fts *FTSDatabase) DeleteFilesBatch(ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	for i := 0; i < len(ids); i += defaultBatchSize {
+		end := i + defaultBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		if err := fts.deleteFilesBatch(ids[i:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deleteFilesBatch deletes given file IDs in a single transaction.
+func (fts *FTSDatabase) deleteFilesBatch(ids []int64) error {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
+	tx, err := fts.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.Exec("DELETE FROM files WHERE id = ?", id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // GetDocument retrieves document mapping by file ID and collection. Returns sql.ErrNoRows if not found.
 func (fts *FTSDatabase) GetDocument(fileID int64, collection string) (*DocumentRecord, error) {
 	fts.mu.Lock()

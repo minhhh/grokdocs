@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	DefaultConcurrency = 10
+	DefaultConcurrency = 1
 )
 
 func makeSlug(collectionName, relPath string) string {
@@ -78,6 +78,7 @@ var defaultExcludeList = []string{
 	"tmp",
 	"temp",
 	"CVS",
+	"pytest_cache",
 
 	// Files
 	".DS_Store",
@@ -211,7 +212,7 @@ func walkFiles(ctx context.Context, collectionRoot string, filter *fileFilter) <
 	return ch
 }
 
-func SyncCollection(proj *project.Project, collectionName string, progress chan<- SyncProgress) (SyncResult, error) {
+func SyncCollection(proj *project.Project, collectionName string, progress *util.GuardedChan[SyncProgress]) (SyncResult, error) {
 	cfg, ok := proj.Config.Collections[collectionName]
 	if !ok {
 		util.Logger.Error().Str("collection", collectionName).Msg("collection not found in config")
@@ -326,12 +327,9 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 			}
 			resultMu.Unlock()
 
-			if progress != nil {
+			if progress != nil {	
 				currentCount := atomic.AddInt32(&processedCount, 1)
-				select {
-				case progress <- SyncProgress{FilesProcessed: int(currentCount), Phase: "Processing", TotalFiles: totalFiles}:
-				default:
-				}
+				progress.Send(SyncProgress{FilesProcessed: int(currentCount), Phase: "Processing", TotalFiles: totalFiles})
 			}
 
 			return nil
@@ -343,10 +341,12 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 	}
 
 	dbFiles, err := db.ListCollectionFiles(collectionName)
+
 	if err != nil {
 		return SyncResult{}, err
 	}
 
+	var deleteIDs []int64
 	for _, collectionFile := range dbFiles {
 		seenMu.Lock()
 		_, ok := seenFiles[collectionFile.Path]
@@ -360,11 +360,13 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 				result.Deleted++
 			}
 			resultMu.Unlock()
-
-			if err := db.DeleteFile(collectionFile.ID); err != nil {
-				util.Logger.Error().Err(err).Str("path", collectionFile.Path).Int64("id", collectionFile.ID).Msg("failed to delete file record")
-				return SyncResult{}, err
-			}
+			deleteIDs = append(deleteIDs, collectionFile.ID)
+		}
+	}
+	if len(deleteIDs) > 0 {
+		if err := db.DeleteFilesBatch(deleteIDs); err != nil {
+			util.Logger.Error().Err(err).Int("count", len(deleteIDs)).Msg("failed to batch delete files")
+			return SyncResult{}, err
 		}
 	}
 

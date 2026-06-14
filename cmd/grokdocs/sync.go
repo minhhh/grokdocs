@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"os"
+		"os"
 	"sync"
 	"time"
 
@@ -62,13 +62,13 @@ var syncCmd = &cobra.Command{
 				progressbar.OptionThrottle(100*time.Millisecond),
 			)
 
-			progress := make(chan ingest.SyncProgress)
+			progress := util.NewGuardedChan[ingest.SyncProgress](0)
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				var totalFiles int
-				for progressUpdate := range progress {
+				for progressUpdate := range progress.Ch() {
 					if progressUpdate.TotalFiles > 0 {
 						bar.ChangeMax(progressUpdate.TotalFiles)
 					}
@@ -82,7 +82,7 @@ var syncCmd = &cobra.Command{
 			}()
 
 			result, err := ingest.SyncCollection(proj, coll, progress)
-			close(progress)
+			progress.Close()
 			wg.Wait()
 
 			if err != nil {
