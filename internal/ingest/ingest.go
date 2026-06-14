@@ -308,7 +308,6 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 			seenFiles[relPath] = true
 			seenMu.Unlock()
 
-			util.Logger.Debug().Str("path", relPath).Msg("Ingetsing ")
 			state, hash, err := ingestFile(db, relPath, walkResult.AbsPath, collectionName, parserName, proj.Config)
 			if err != nil {
 				return err
@@ -329,7 +328,10 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 
 			if progress != nil {
 				currentCount := atomic.AddInt32(&processedCount, 1)
-				progress <- SyncProgress{FilesProcessed: int(currentCount), Phase: "Processing", TotalFiles: totalFiles}
+				select {
+				case progress <- SyncProgress{FilesProcessed: int(currentCount), Phase: "Processing", TotalFiles: totalFiles}:
+				default:
+				}
 			}
 
 			return nil
@@ -345,7 +347,6 @@ func SyncCollection(proj *project.Project, collectionName string, progress chan<
 		return SyncResult{}, err
 	}
 
-	util.Logger.Info().Msg("=====Cleanup ")
 	for _, collectionFile := range dbFiles {
 		seenMu.Lock()
 		_, ok := seenFiles[collectionFile.Path]
