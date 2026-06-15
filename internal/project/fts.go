@@ -2,6 +2,7 @@ package project
 
 import (
 	"database/sql"
+	"strings"
 	"sync"
 
 	"github.com/minhhh/grokdocs/internal/util"
@@ -275,33 +276,34 @@ func (fts *FTSDatabase) DeleteFilesBatch(ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
+	util.Logger.Debug().Int("total", len(ids)).Msg("deleting file records")
 	for i := 0; i < len(ids); i += defaultBatchSize {
 		end := i + defaultBatchSize
 		if end > len(ids) {
 			end = len(ids)
 		}
-		if err := fts.deleteFilesBatch(ids[i:end]); err != nil {
+		batch := ids[i:end]
+		util.Logger.Debug().Int("batch_size", len(batch)).Int("batch_num", i/defaultBatchSize+1).Msg("deleting file batch")
+		if err := fts.deleteFilesBatch(batch); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// deleteFilesBatch deletes given file IDs in a single transaction.
+// deleteFilesBatch deletes given file IDs with a single IN clause.
 func (fts *FTSDatabase) deleteFilesBatch(ids []int64) error {
 	fts.mu.Lock()
 	defer fts.mu.Unlock()
-	tx, err := fts.db.Begin()
-	if err != nil {
-		return err
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
 	}
-	defer tx.Rollback()
-	for _, id := range ids {
-		if _, err := tx.Exec("DELETE FROM files WHERE id = ?", id); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+	query := "DELETE FROM files WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	_, err := fts.db.Exec(query, args...)
+	return err
 }
 
 // GetDocument retrieves document mapping by file ID and collection. Returns sql.ErrNoRows if not found.

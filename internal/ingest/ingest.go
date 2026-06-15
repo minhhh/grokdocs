@@ -20,9 +20,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	DefaultConcurrency = 1
-)
+
 
 func makeSlug(collectionName, relPath string) string {
 	s := collectionName + "--" + relPath
@@ -212,7 +210,7 @@ func walkFiles(ctx context.Context, collectionRoot string, filter *fileFilter) <
 	return ch
 }
 
-func SyncCollection(proj *project.Project, collectionName string, progress *util.GuardedChan[SyncProgress]) (SyncResult, error) {
+func SyncCollection(proj *project.Project, collectionName string, progress *util.GuardedChan[SyncProgress], prune bool, concurrency int) (SyncResult, error) {
 	cfg, ok := proj.Config.Collections[collectionName]
 	if !ok {
 		util.Logger.Error().Str("collection", collectionName).Msg("collection not found in config")
@@ -251,7 +249,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 	)
 
 	g, ctx := errgroup.WithContext(context.Background())
-	semaphore := make(chan struct{}, DefaultConcurrency)
+	semaphore := make(chan struct{}, concurrency)
 
 	// Count total number of files
 	totalFiles := 0
@@ -346,36 +344,38 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 		return SyncResult{}, err
 	}
 
-	var deleteIDs []int64
-	for _, collectionFile := range dbFiles {
-		seenMu.Lock()
-		_, ok := seenFiles[collectionFile.Path]
-		seenMu.Unlock()
-		if !ok {
-			resultMu.Lock()
-			if destState, isMoved := newFileHashes[collectionFile.Hash]; isMoved {
-				result.Moved++
-				movedToState[collectionFile.Hash] = destState
-			} else {
-				result.Deleted++
+	if prune {
+		var deleteIDs []int64
+		for _, collectionFile := range dbFiles {
+			seenMu.Lock()
+			_, ok := seenFiles[collectionFile.Path]
+			seenMu.Unlock()
+			if !ok {
+				resultMu.Lock()
+				if destState, isMoved := newFileHashes[collectionFile.Hash]; isMoved {
+					result.Moved++
+					movedToState[collectionFile.Hash] = destState
+				} else {
+					result.Deleted++
+				}
+				resultMu.Unlock()
+				deleteIDs = append(deleteIDs, collectionFile.ID)
 			}
-			resultMu.Unlock()
-			deleteIDs = append(deleteIDs, collectionFile.ID)
 		}
-	}
-	if len(deleteIDs) > 0 {
-		if err := db.DeleteFilesBatch(deleteIDs); err != nil {
-			util.Logger.Error().Err(err).Int("count", len(deleteIDs)).Msg("failed to batch delete files")
+		if len(deleteIDs) > 0 {
+			if err := db.DeleteFilesBatch(deleteIDs); err != nil {
+				util.Logger.Error().Err(err).Int("count", len(deleteIDs)).Msg("failed to batch delete files")
+				return SyncResult{}, err
+			}
+		}
+
+		// Remove orphaned documents (file_id points to a file that no longer exists).
+		// This covers cases where SQLite FK cascade didn't fire (e.g. earlier runs
+		// without PRAGMA foreign_keys=ON).
+		if err := db.DeleteOrphanedDocuments(collectionName); err != nil {
+			util.Logger.Error().Err(err).Str("collection", collectionName).Msg("failed to cleanup orphaned documents")
 			return SyncResult{}, err
 		}
-	}
-
-	// Remove orphaned documents (file_id points to a file that no longer exists).
-	// This covers cases where SQLite FK cascade didn't fire (e.g. earlier runs
-	// without PRAGMA foreign_keys=ON).
-	if err := db.DeleteOrphanedDocuments(collectionName); err != nil {
-		util.Logger.Error().Err(err).Str("collection", collectionName).Msg("failed to cleanup orphaned documents")
-		return SyncResult{}, err
 	}
 
 	// Deduct moved-to files from Added/Modified so each old file maps to

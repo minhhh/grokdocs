@@ -64,7 +64,7 @@ func TestFileWalking(t *testing.T) {
 	}
 	defer db.Close()
 
-	if _, err := SyncCollection(proj, "default", nil); err != nil {
+	if _, err := SyncCollection(proj, "default", nil, true, 1); err != nil {
 		t.Fatalf("SyncCollection failed: %v", err)
 	}
 
@@ -214,7 +214,7 @@ We hope you enjoy searching locally and offline.
 	defer db.Close()
 
 	// Initial sync
-	if _, err := SyncCollection(proj, "default", nil); err != nil {
+	if _, err := SyncCollection(proj, "default", nil, true, 1); err != nil {
 		t.Fatalf("SyncCollection failed: %v", err)
 	}
 
@@ -246,7 +246,7 @@ We have replaced the word and added remote.
 		t.Fatal(err)
 	}
 
-	if _, err := SyncCollection(proj, "default", nil); err != nil {
+	if _, err := SyncCollection(proj, "default", nil, true, 1); err != nil {
 		t.Fatalf("SyncCollection failed: %v", err)
 	}
 
@@ -273,7 +273,7 @@ We have replaced the word and added remote.
 		t.Fatal(err)
 	}
 
-	if _, err := SyncCollection(proj, "default", nil); err != nil {
+	if _, err := SyncCollection(proj, "default", nil, true, 1); err != nil {
 		t.Fatalf("SyncCollection failed: %v", err)
 	}
 
@@ -333,7 +333,7 @@ func TestSyncCollectionWithFileFiltering(t *testing.T) {
 	}
 	defer db.Close()
 
-	if _, err := SyncCollection(proj, "default", nil); err != nil {
+	if _, err := SyncCollection(proj, "default", nil, true, 1); err != nil {
 		t.Fatalf("SyncCollection failed: %v", err)
 	}
 
@@ -440,7 +440,7 @@ func TestSyncSkipsUnchangedFile(t *testing.T) {
 	defer db.Close()
 
 	// First sync — ingests the file
-	if _, err := SyncCollection(proj, "default", nil); err != nil {
+	if _, err := SyncCollection(proj, "default", nil, true, 1); err != nil {
 		t.Fatalf("first SyncCollection failed: %v", err)
 	}
 
@@ -450,7 +450,7 @@ func TestSyncSkipsUnchangedFile(t *testing.T) {
 	}
 
 	// Second sync — mtime matches, should hit mtime-skip branch
-	if _, err := SyncCollection(proj, "default", nil); err != nil {
+	if _, err := SyncCollection(proj, "default", nil, true, 1); err != nil {
 		t.Fatalf("second SyncCollection failed: %v", err)
 	}
 
@@ -504,7 +504,7 @@ func TestSyncCollectionResult(t *testing.T) {
 	}
 
 	// First sync — ingest all 4 files
-	if _, err := SyncCollection(proj, "default", nil); err != nil {
+	if _, err := SyncCollection(proj, "default", nil, true, 1); err != nil {
 		t.Fatalf("first SyncCollection failed: %v", err)
 	}
 
@@ -536,7 +536,7 @@ func TestSyncCollectionResult(t *testing.T) {
 	// intro.md is untouched — unchanged
 
 	// Second sync
-	result, err := SyncCollection(proj, "default", nil)
+	result, err := SyncCollection(proj, "default", nil, true, 1)
 	if err != nil {
 		t.Fatalf("second SyncCollection failed: %v", err)
 	}
@@ -570,7 +570,7 @@ func TestSyncCollectionCollectionNotFound(t *testing.T) {
 		},
 	}
 
-	_, err = SyncCollection(proj, "nonexistent-collection", nil)
+	_, err = SyncCollection(proj, "nonexistent-collection", nil, true, 1)
 	if err == nil {
 		t.Fatal("expected error for nonexistent collection")
 	}
@@ -597,7 +597,7 @@ func TestSyncCollectionPathIsFile(t *testing.T) {
 		},
 	}
 
-	_, err = SyncCollection(proj, "default", nil)
+	_, err = SyncCollection(proj, "default", nil, true, 1)
 	if err == nil {
 		t.Fatal("expected error when collection path is a file")
 	}
@@ -619,7 +619,7 @@ func TestSyncCollectionPathDoesNotExist(t *testing.T) {
 		},
 	}
 
-	_, err = SyncCollection(proj, "default", nil)
+	_, err = SyncCollection(proj, "default", nil, true, 1)
 	if err == nil {
 		t.Fatal("expected error for nonexistent collection path")
 	}

@@ -13,10 +13,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	syncAll        bool
-	syncCollection string
-)
+	var (
+		syncAll        bool
+		syncCollection string
+		syncPrune      bool
+		syncConcurrency int
+	)
 
 var syncCmd = &cobra.Command{
 	Use:   "sync",
@@ -43,6 +45,11 @@ var syncCmd = &cobra.Command{
 		}
 		defer proj.Close()
 
+		if syncConcurrency < 1 {
+			util.Logger.Error().Int("concurrency", syncConcurrency).Msg("--concurrency must be at least 1")
+			os.Exit(1)
+		}
+
 		var targets []string
 		if syncAll {
 			for name := range proj.Config.Collections {
@@ -67,21 +74,20 @@ var syncCmd = &cobra.Command{
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				var totalFiles int
 				for progressUpdate := range progress.Ch() {
 					if progressUpdate.TotalFiles > 0 {
 						bar.ChangeMax(progressUpdate.TotalFiles)
+						if progressUpdate.FilesProcessed == progressUpdate.TotalFiles {
+							bar.Finish()
+							break
+						}
 					}
 					bar.Set(progressUpdate.FilesProcessed)
-					totalFiles = progressUpdate.FilesProcessed
 				}
-				bar.ChangeMax(totalFiles)
-				bar.Set(totalFiles)
-				bar.Finish()
 				fmt.Fprintln(os.Stderr)
 			}()
 
-			result, err := ingest.SyncCollection(proj, coll, progress)
+			result, err := ingest.SyncCollection(proj, coll, progress, syncPrune, syncConcurrency)
 			progress.Close()
 			wg.Wait()
 
@@ -102,5 +108,7 @@ var syncCmd = &cobra.Command{
 func init() {
 	syncCmd.Flags().BoolVar(&syncAll, "all", false, "Synchronize all configured collections")
 	syncCmd.Flags().StringVar(&syncCollection, "collection", "", "Synchronize only the specified collection")
+	syncCmd.Flags().BoolVar(&syncPrune, "prune", false, "Remove orphaned file records (files deleted from disk since last sync)")
+	syncCmd.Flags().IntVar(&syncConcurrency, "concurrency", 1, "Number of files to process concurrently")
 	rootCmd.AddCommand(syncCmd)
 }
