@@ -26,6 +26,8 @@ func makeSlug(collectionName, relPath string) string {
 	s := collectionName + "--" + relPath
 	s = strings.ReplaceAll(s, "/", "--")
 	s = strings.ReplaceAll(s, ".", "-")
+	s = strings.ReplaceAll(s, " ", "-")
+	s = strings.ToLower(s)
 	return s
 }
 
