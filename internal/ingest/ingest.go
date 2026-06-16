@@ -219,11 +219,11 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 		return SyncResult{}, errors.New("collection not found")
 	}
 
-	util.Logger.Info().Str("name", collectionName).Str("path", cfg.Path).Msg("Synchronizing collection")
-
 	fileFilter := newFileFilter(cfg.Files, cfg.Include, cfg.Exclude)
 
 	absCollectionPath := filepath.Join(proj.RootPath, cfg.Path)
+
+	util.Logger.Info().Msgf("Synchronizing collection %q (%s)", collectionName, absCollectionPath)
 	info, err := os.Stat(absCollectionPath)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", absCollectionPath).Msg("collection path error")

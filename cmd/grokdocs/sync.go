@@ -2,7 +2,8 @@ package main
 
 import (
 	"fmt"
-		"os"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -95,7 +96,8 @@ var syncCmd = &cobra.Command{
 				os.Exit(1)
 			}
 
-			fmt.Fprintln(os.Stderr, "Sync complete:")
+			absPath := filepath.Join(proj.RootPath, proj.Config.Collections[coll].Path)
+			fmt.Fprintf(os.Stderr, "Synced collection %q (%s):\n", coll, absPath)
 			fmt.Fprintf(os.Stderr, "  unchanged: %d\n", result.Unchanged)
 			fmt.Fprintf(os.Stderr, "  added:     %d\n", result.Added)
 			fmt.Fprintf(os.Stderr, "  modified:  %d\n", result.Modified)
