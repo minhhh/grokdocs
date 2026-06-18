@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/minhhh/grokdocs/internal/config"
 	"github.com/minhhh/grokdocs/internal/ingest"
 	"github.com/minhhh/grokdocs/internal/project"
 	"github.com/minhhh/grokdocs/internal/util"
@@ -59,7 +60,7 @@ var syncCmd = &cobra.Command{
 		} else if syncCollection != "" {
 			targets = []string{syncCollection}
 		} else {
-			targets = []string{"default"}
+			targets = []string{config.DefaultCollectionName}
 		}
 
 		for _, coll := range targets {

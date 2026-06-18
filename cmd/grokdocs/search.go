@@ -76,12 +76,14 @@ var searchCmd = &cobra.Command{
 				os.Exit(1)
 			}
 			var semanticResults []*project.FTSResult
-			if semanticSearchFn != nil {
+			if semanticSearchFn != nil && searchCollection != "" {
 				var semErr error
 				semanticResults, semErr = semanticSearchFn(proj, db, query, searchCollection, limit)
 				if semErr != nil {
 					util.Logger.Warn().Err(semErr).Msg("semantic search failed, using FTS only")
 				}
+			} else if searchCollection == "" {
+				util.Logger.Debug().Msg("semantic search requires --collection; using FTS only")
 			} else {
 				util.Logger.Warn().Msg("semantic search unavailable (compile with -tags onnx); using FTS only")
 			}

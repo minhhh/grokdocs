@@ -148,6 +148,9 @@ func CollectionIndexName(collection string) string {
 
 // OpenCollectionVector opens (or initializes) the per-collection FAISS vector database.
 func (p *Project) OpenCollectionVector(collection string) (*VectorDatabase, error) {
+	if collection == "" {
+		return nil, fmt.Errorf("collection name is required")
+	}
 	if p.collVectorDBs == nil {
 		p.collVectorDBs = make(map[string]*VectorDatabase)
 	}

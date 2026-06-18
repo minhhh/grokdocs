@@ -34,12 +34,30 @@ similarity and keyword search.
 - Go 1.21 or later.
 - C/C++ compiler (e.g., `gcc` or `clang`) if building with CGO dependencies (such as FAISS via `go-faiss`).
 
+### Build Tags
+
+Two build tags control feature inclusion:
+
+| Tag     | Enables                                                              |
+|---------|----------------------------------------------------------------------|
+| `fts5`  | SQLite FTS5 full-text search (required for FTS functionality)        |
+| `onnx`  | Local ONNX embeddings + FAISS vector search (semantic/hybrid search) |
+
+- Without `fts5`, the binary cannot create or query FTS5 tables.
+- Without `onnx`, the binary still supports FTS search but semantic and hybrid modes are disabled.
+
 ### Building from Source
 
-Clone the repository and build the binary:
+Build with FTS5 only (FTS search, no vector/semantic search):
 
 ```bash
 go build -tags fts5 ./cmd/grokdocs
+```
+
+Build with full capabilities (FTS5 + ONNX + FAISS):
+
+```bash
+go build -tags fts5,onnx ./cmd/grokdocs
 ```
 
 This produces a `grokdocs` executable in the root directory.
@@ -63,23 +81,36 @@ go build -tags fts5 -o grokdocs ./cmd/grokdocs
 Install the binary to `$GOPATH/bin` so it's available from anywhere:
 
 ```bash
-go install -tags fts5 -ldflags "-X main.version=1.0.0" ./cmd/grokdocs
+go install -tags fts5,onnx -ldflags "-X main.version=1.0.0" ./cmd/grokdocs
 ```
 
 Ensure `$(go env GOPATH)/bin` is in your `PATH`.
 
 ### Running Tests
 
+Run all tests that don't require build tags (some tests may be skipped):
+
 ```bash
 go test ./...
 ```
 
-Note: Tests requiring SQLite FTS5 (`go test -tags fts5`) will be skipped if
-your system SQLite build lacks the FTS5 module. Run them explicitly with:
+Run tests with FTS5 only:
 
 ```bash
 go test -tags fts5 ./...
 ```
+
+Run tests with full capabilities (FTS5 + ONNX + FAISS):
+
+```bash
+go test -tags fts5,onnx ./...
+```
+
+Tests gated behind `//go:build onnx` (embedding, vector ingestion, semantic
+search) are only compiled and executed when the `onnx` tag is supplied. The
+`fts5` tag is required by `mattn/go-sqlite3` at the CGO level to enable the
+FTS5 extension — without it, any test or operation touching FTS5 tables will
+fail.
 
 ### Quick Start
 
