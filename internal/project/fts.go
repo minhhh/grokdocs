@@ -401,6 +401,29 @@ func (fts *FTSDatabase) GetChunksForDocument(docID int64) ([]*ChunkRecord, error
 	return chunks, nil
 }
 
+// GetChunkIDsByFileID returns all chunk IDs for a given file ID by joining through documents.
+func (fts *FTSDatabase) GetChunkIDsByFileID(fileID int64) ([]int64, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
+	rows, err := fts.db.Query(`
+		SELECT c.id FROM chunks c
+		JOIN documents d ON c.document_id = d.id
+		WHERE d.file_id = ?`, fileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
 // SaveChunk inserts or updates a text chunk.
 func (fts *FTSDatabase) SaveChunk(chunk *ChunkRecord) error {
 	fts.mu.Lock()
@@ -455,7 +478,7 @@ func (fts *FTSDatabase) SaveChunksBatch(chunks []*ChunkRecord) error {
 		if chunk.Metadata != "" {
 			metadata = chunk.Metadata
 		}
-		_, err := tx.Exec(`
+		result, err := tx.Exec(`
 			INSERT INTO chunks (document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, slug, metadata)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			chunk.DocumentID, chunk.ChunkIndex, chunk.TextContent, chunk.ContentHash, chunk.TotalChars,
@@ -464,6 +487,11 @@ func (fts *FTSDatabase) SaveChunksBatch(chunks []*ChunkRecord) error {
 		if err != nil {
 			return err
 		}
+		lastID, err := result.LastInsertId()
+		if err != nil {
+			return err
+		}
+		chunk.ID = lastID
 	}
 
 	return tx.Commit()
@@ -475,6 +503,46 @@ func (fts *FTSDatabase) DeleteChunksForDocument(docID int64) error {
 	defer fts.mu.Unlock()
 	_, err := fts.db.Exec("DELETE FROM chunks WHERE document_id = ?", docID)
 	return err
+}
+
+// GetChunkByID retrieves a single chunk by its primary key ID.
+func (fts *FTSDatabase) GetChunkByID(id int64) (*ChunkRecord, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
+	row := fts.db.QueryRow(`
+		SELECT id, document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, slug, metadata
+		FROM chunks WHERE id = ?`, id)
+	var record ChunkRecord
+	var metadata sql.NullString
+	err := row.Scan(
+		&record.ID, &record.DocumentID, &record.ChunkIndex, &record.TextContent, &record.ContentHash, &record.TotalChars,
+		&record.LineStart, &record.LineEnd, &record.SectionNum, &record.SectionTitle, &record.Slug, &metadata,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if metadata.Valid {
+		record.Metadata = metadata.String
+	}
+	return &record, nil
+}
+
+// GetDocumentByID retrieves a single document record by its primary key ID.
+func (fts *FTSDatabase) GetDocumentByID(docID int64) (*DocumentRecord, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
+	row := fts.db.QueryRow(`
+		SELECT id, file_id, collection, slug, chunk_count, total_chars, metadata
+		FROM documents WHERE id = ?`, docID)
+	var record DocumentRecord
+	var metadata sql.NullString
+	if err := row.Scan(&record.ID, &record.FileID, &record.Collection, &record.Slug, &record.ChunkCount, &record.TotalChars, &metadata); err != nil {
+		return nil, err
+	}
+	if metadata.Valid {
+		record.Metadata = metadata.String
+	}
+	return &record, nil
 }
 
 // SearchFTS queries the FTS5 virtual table for matching text and returns matching chunks + FTS BM25 rank score.

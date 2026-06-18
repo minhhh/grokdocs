@@ -8,7 +8,7 @@ import (
 	"github.com/minhhh/grokdocs/internal/project"
 )
 
-const DefaultChunkMaxSize = 500
+const DefaultChunkMaxSize = 400
 const DefaultChunkOverlap = 10
 
 // ParsedDocument contains document slug, metadata JSON string, and chunks.

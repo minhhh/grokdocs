@@ -33,7 +33,7 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Current tracker.*
 
-
+*No active tasks.*
 
 ---
 
@@ -41,50 +41,11 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *Only contains details/checklists for active tasks in Section 2.*
 
-- **Validation**:
-  - Run sync with `-v` on a directory with mixed file states: new files, modified files, moved files, deleted files. Verify progress ticks are printed and final summary counts match expectations.
-  - Unit test verifying `SyncResult` counts are correct after a controlled sequence of changes.
-
-
-
 ---
 
 ## 4. Future Roadmap & Backlog
 
 *Placeholders for future tasks.*
-
-- [ ] **PRD-017**: Integrate local ONNX models to convert chunks to vectors on-device
-- [ ] **PRD-018**: Integrate FAISS via `go-faiss` to store vectors and perform similarity searches
-- [ ] **PRD-xxx**: Check the ingest check for prefix with prefix += "/" whether it will work cross platform
-
-### PRD-017: Integrate local ONNX models to convert chunks to vectors on-device
-
-- **Objective**: Use a local ONNX model (such as `all-MiniLM-L6-v2` or `bge-small-en-v1.5`) to generate vector embeddings for text chunks. The application should dynamically download the model and tokenizer files on first run if they are not cached.
-
-- **Checklist**:
-  - [ ] Implement dynamic model downloader:
-    - Define default download URLs (e.g. Hugging Face CDN) for the ONNX model and tokenizer/vocab.
-    - Check if the model files exist in the `.grokdocs` cache directory on run.
-    - If missing, download them dynamically and save them locally.
-  - [ ] Load ONNX model locally using ONNX Runtime Go bindings.
-  - [ ] Feed text chunks into the model to generate embedding vectors.
-
-- **Validation**:
-  - Add a unit test `TestONNXEmbeddings` verifying that:
-    - The downloader successfully retrieves the model and tokenizer files.
-    - Loading the model and embedding a test text sentence returns a valid floating-point slice of expected dimension (e.g., 384 float values for MiniLM).
-
-### PRD-018: Integrate FAISS via go-faiss to store vectors and perform similarity searches
-
-- **Objective**: Embed FAISS index storage and similarity search capability using the `go-faiss` bindings inside the `VectorDatabase` wrapper.
-
-- **Checklist**:
-  - [ ] Integrate `go-faiss` dependency
-  - [ ] Implement vector addition and saving/loading in `VectorDatabase`
-  - [ ] Implement nearest neighbor queries in `VectorDatabase`
-
-- **Validation**:
-  - Implement a unit test `TestFAISSIndex` which initializes a `VectorDatabase` instance, writes dummy embedding vectors, queries the index for similarity, and asserts that the returned nearest IDs and distance values are correct.
 
 ---
 
@@ -92,7 +53,39 @@ grokdocs is a CLI tool for document ingestion, processing, and Full-Text Search.
 
 *When a task is completed, cut-and-paste both its Dashboard status and its Detailed Requirements/Checklist here.*
 
+- [x] **PRD-017**: Integrate local ONNX models to convert chunks to vectors on-device
+- [x] **PRD-018**: Integrate FAISS via `go-faiss` to store vectors and perform similarity searches
+
 - [x] **PRD-001**: Scaffold the Go project structure (`cmd`, `internal`, `pkg`)
+
+### PRD-017: Integrate local ONNX models to convert chunks to vectors on-device
+
+- **Objective**: Use a local ONNX model (such as `paraphrase-multilingual-MiniLM-L12-v2`) to generate vector embeddings for text chunks. The application should dynamically download the model and tokenizer files on first run if they are not cached.
+
+- **Checklist**:
+  - [x] Implement dynamic model downloader (`internal/embed/downloader.go`):
+    - Default download URLs for paraphrase-multilingual-MiniLM-L12-v2 ONNX model and vocab from HuggingFace.
+    - Checks `.grokdocs/models/paraphrase-multilingual-MiniLM-L12-v2/` cache directory; downloads if missing.
+  - [x] Load ONNX model via `github.com/yalue/onnxruntime_go` (build tag: `onnx`).
+  - [x] WordPiece tokenizer (`internal/embed/tokenizer.go`) for BERT-style tokenization with vocab.txt.
+  - [x] `Embedder` in `internal/embed/embed.go`: tokenize → ONNX inference → mean pooling → L2 normalization → [384] vector.
+
+- **Validation**:
+  - [x] `TestONNXEmbeddings`: downloads model, initializes `Embedder`, embeds a sentence, verifies dimension (384) and L2 normalization.
+
+### PRD-018: Integrate FAISS via go-faiss to store vectors and perform similarity searches
+
+- **Objective**: Embed FAISS index storage and similarity search capability using the `go-faiss` bindings inside the `VectorDatabase` wrapper.
+
+- **Checklist**:
+  - [x] `github.com/DataIntelligenceCrew/go-faiss` added to `go.mod`.
+  - [x] `VectorDatabase` (`internal/project/vector.go`):
+    - Creates `IDMap,Flat` index via `faiss.IndexFactory`.
+    - `AddVectors(ids, vectors)` using `AddWithIDs`.
+    - `Search(query, k)` returning nearest IDs and distances.
+    - `Save()` via `faiss.WriteIndex`; `Close()` via `index.Delete()`.
+    - `OpenVectorDatabase` / `OpenVectorDatabaseWithDim` — reads existing index or creates new.
+  - [x] `TestFAISSIndex`: writes 3 vectors in 4D, searches, verifies nearest neighbor ID and distance, saves/reloads and re-verifies.
 - [x] **PRD-002**: Add benchmarks folder and setup initial benchmark harness
 - [x] **PRD-003**: Implement CLI commands structure (`init`, `sync`, `search`) using Cobra with project path flag (`-p`) support
 - [x] **PRD-004**: Initialize project workspace and FTS database

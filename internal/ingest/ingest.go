@@ -22,6 +22,9 @@ import (
 
 
 
+// vectorIngestFn is set by onnx-enabled builds to embed chunks and push to FAISS.
+var vectorIngestFn func(proj *project.Project, collection string, chunks []*project.ChunkRecord) error
+
 func makeSlug(collectionName, relPath string) string {
 	s := collectionName + "--" + relPath
 	s = strings.ReplaceAll(s, "/", "--")
@@ -309,9 +312,15 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 			seenFiles[relPath] = true
 			seenMu.Unlock()
 
-			state, hash, err := ingestFile(db, relPath, walkResult.AbsPath, collectionName, parserName, proj.Config)
+			state, hash, chunks, err := ingestFile(db, relPath, walkResult.AbsPath, collectionName, parserName, proj.Config)
 			if err != nil {
 				return err
+			}
+
+			if state != FileUnchanged && len(chunks) > 0 && vectorIngestFn != nil {
+				if err := vectorIngestFn(proj, collectionName, chunks); err != nil {
+					util.Logger.Warn().Err(err).Str("file", relPath).Msg("vector ingestion skipped")
+				}
 			}
 
 			resultMu.Lock()
@@ -348,6 +357,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 
 	if prune {
 		var deleteIDs []int64
+		var deletedChunkIDs []int64
 		for _, collectionFile := range dbFiles {
 			seenMu.Lock()
 			_, ok := seenFiles[collectionFile.Path]
@@ -362,12 +372,33 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 				}
 				resultMu.Unlock()
 				deleteIDs = append(deleteIDs, collectionFile.ID)
+
+				chunkIDs, err := db.GetChunkIDsByFileID(collectionFile.ID)
+				if err != nil {
+					util.Logger.Warn().Err(err).Int64("file_id", collectionFile.ID).Msg("failed to query chunk IDs for pruning")
+				}
+				deletedChunkIDs = append(deletedChunkIDs, chunkIDs...)
 			}
 		}
 		if len(deleteIDs) > 0 {
 			if err := db.DeleteFilesBatch(deleteIDs); err != nil {
 				util.Logger.Error().Err(err).Int("count", len(deleteIDs)).Msg("failed to batch delete files")
 				return SyncResult{}, err
+			}
+		}
+
+		if vectorIngestFn != nil && len(deletedChunkIDs) > 0 {
+			vdb, err := proj.OpenCollectionVector(collectionName)
+			if err != nil {
+				util.Logger.Warn().Err(err).Msg("failed to open vector db for pruning")
+			} else {
+				if err := vdb.RemoveIDs(deletedChunkIDs); err != nil {
+					util.Logger.Warn().Err(err).Int("count", len(deletedChunkIDs)).Msg("failed to prune vectors")
+				} else {
+					if err := vdb.Save(); err != nil {
+						util.Logger.Warn().Err(err).Msg("failed to save vector index after pruning")
+					}
+				}
 			}
 		}
 
@@ -394,11 +425,11 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 	return result, nil
 }
 
-func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collectionName string, parserName string, cfg *config.Config) (FileState, string, error) {
+func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collectionName string, parserName string, cfg *config.Config) (FileState, string, []*project.ChunkRecord, error) {
 	info, err := os.Stat(absPath)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", absPath).Msg("failed to stat file")
-		return FileUnchanged, "", err
+		return FileUnchanged, "", nil, err
 	}
 
 	size := info.Size()
@@ -407,13 +438,13 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 	hash, err := computeSHA256(absPath)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", absPath).Msg("failed to compute hash")
-		return FileUnchanged, "", err
+		return FileUnchanged, "", nil, err
 	}
 
 	contentBytes, err := os.ReadFile(absPath)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", absPath).Msg("failed to read file")
-		return FileUnchanged, "", err
+		return FileUnchanged, "", nil, err
 	}
 	content := string(contentBytes)
 
@@ -432,32 +463,32 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 			}
 			if err := db.SaveFile(fileRecord); err != nil {
 				util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to save file")
-				return FileUnchanged, "", err
+				return FileUnchanged, "", nil, err
 			}
 		} else {
 			util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to query file")
-			return FileUnchanged, "", err
+			return FileUnchanged, "", nil, err
 		}
 	} else {
 		if fileRecord.ModifiedAt == mtime {
 			util.Logger.Debug().Str("path", relPath).Msg("Skipping file (mtime matches)")
-			return FileUnchanged, hash, nil
+			return FileUnchanged, hash, nil, nil
 		}
 		if fileRecord.ContentHash == hash {
 			util.Logger.Debug().Str("path", relPath).Msg("Skipping file (hash matches)")
 			fileRecord.ModifiedAt = mtime
 			if err := db.SaveFile(fileRecord); err != nil {
 				util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to update modified time")
-				return FileUnchanged, "", err
+				return FileUnchanged, "", nil, err
 			}
-			return FileUnchanged, hash, nil
+			return FileUnchanged, hash, nil, nil
 		}
 		fileRecord.Size = size
 		fileRecord.ModifiedAt = mtime
 		fileRecord.ContentHash = hash
 		if err := db.SaveFile(fileRecord); err != nil {
 			util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to update file")
-			return FileUnchanged, "", err
+			return FileUnchanged, "", nil, err
 		}
 	}
 
@@ -473,19 +504,19 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 			}
 		} else {
 			util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to get document")
-			return FileUnchanged, "", err
+			return FileUnchanged, "", nil, err
 		}
 	} else {
 		if err := db.DeleteChunksForDocument(docRecord.ID); err != nil {
 			util.Logger.Error().Err(err).Int64("doc_id", docRecord.ID).Msg("failed to delete old chunks")
-			return FileUnchanged, "", err
+			return FileUnchanged, "", nil, err
 		}
 	}
 
 	docParser, ok := parser.GetParser(parserName)
 	if !ok {
 		util.Logger.Error().Str("parser", parserName).Msg("parser not found in registry")
-		return FileUnchanged, "", errors.New("parser not found")
+		return FileUnchanged, "", nil, errors.New("parser not found")
 	}
 
 	util.Logger.Debug().Str("path", relPath).Str("parser", parserName).Msg("Ingesting file")
@@ -493,7 +524,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 	parsedDoc, err := docParser.Parse(relPath, content, size)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", relPath).Str("parser", parserName).Msg("failed to parse file")
-		return FileUnchanged, "", err
+		return FileUnchanged, "", nil, err
 	}
 
 	docRecord.Slug = makeSlug(collectionName, relPath)
@@ -503,7 +534,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 
 	if err := db.SaveDocument(docRecord); err != nil {
 		util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to save document")
-		return FileUnchanged, "", err
+		return FileUnchanged, "", nil, err
 	}
 
 	for i, chunk := range parsedDoc.Chunks {
@@ -514,10 +545,10 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 
 	if err := db.SaveChunksBatch(parsedDoc.Chunks); err != nil {
 		util.Logger.Error().Err(err).Str("path", relPath).Msg("failed to save chunks")
-		return FileUnchanged, "", err
+		return FileUnchanged, "", nil, err
 	}
 
-	return fileState, hash, nil
+	return fileState, hash, parsedDoc.Chunks, nil
 }
 
 // fileFilter applies files/include/exclude rules from a collection config.

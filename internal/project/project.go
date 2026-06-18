@@ -2,6 +2,7 @@ package project
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -18,11 +19,12 @@ const (
 
 // Project represents the grokdocs project workspace.
 type Project struct {
-	RootPath   string
-	ConfigDir  string // Absolute path to .grokdocs directory
-	Config     *config.Config
-	ftsDB      *FTSDatabase
-	vectorDB   *VectorDatabase
+	RootPath      string
+	ConfigDir     string // Absolute path to .grokdocs directory
+	Config        *config.Config
+	ftsDB         *FTSDatabase
+	vectorDB      *VectorDatabase
+	collVectorDBs map[string]*VectorDatabase
 }
 
 // NewProject creates a new Project instance for the given root path.
@@ -139,6 +141,28 @@ func (p *Project) OpenVector() (*VectorDatabase, error) {
 	return db, nil
 }
 
+// CollectionIndexName returns the FAISS index filename for a given collection.
+func CollectionIndexName(collection string) string {
+	return fmt.Sprintf("grokdocs-%s.index", collection)
+}
+
+// OpenCollectionVector opens (or initializes) the per-collection FAISS vector database.
+func (p *Project) OpenCollectionVector(collection string) (*VectorDatabase, error) {
+	if p.collVectorDBs == nil {
+		p.collVectorDBs = make(map[string]*VectorDatabase)
+	}
+	if vdb, ok := p.collVectorDBs[collection]; ok {
+		return vdb, nil
+	}
+	indexPath := filepath.Join(p.ConfigDir, CollectionIndexName(collection))
+	vdb, err := OpenVectorDatabase(indexPath)
+	if err != nil {
+		return nil, err
+	}
+	p.collVectorDBs[collection] = vdb
+	return vdb, nil
+}
+
 // Close closes any open database connections.
 func (p *Project) Close() error {
 	var ftsErr, vecErr error
@@ -150,6 +174,12 @@ func (p *Project) Close() error {
 		vecErr = p.vectorDB.Close()
 		p.vectorDB = nil
 	}
+	for _, vdb := range p.collVectorDBs {
+		if err := vdb.Close(); err != nil {
+			vecErr = err
+		}
+	}
+	p.collVectorDBs = nil
 	if ftsErr != nil {
 		return ftsErr
 	}
