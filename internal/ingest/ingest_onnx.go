@@ -16,30 +16,21 @@ func init() {
 }
 
 func ingestVectors(proj *project.Project, collection string, chunks []*project.ChunkRecord) error {
-	mf, err := embed.GetOrDownloadModels(proj.ConfigDir)
-	if err != nil {
-		return fmt.Errorf("get models: %w", err)
-	}
-
-	embedder, err := embed.NewEmbedder(mf.ModelPath, mf.VocabPath)
-	if err != nil {
-		return fmt.Errorf("new embedder: %w", err)
-	}
-	defer embedder.Close()
-
-	vdb, err := proj.OpenCollectionVector(collection)
+	vdb, err := proj.OpenCollectionVector(collection, embed.Dim())
 	if err != nil {
 		return fmt.Errorf("open collection vector db: %w", err)
 	}
 
 	var ids []int64
-	vectors := make([]float32, 0, len(chunks)*embedder.Dim())
+	vectors := make([]float32, 0, len(chunks)*embed.Dim())
+
+	util.Logger.Debug().Int("chunks", len(chunks)).Str("collection", collection).Msg("ingesting chunks into vector index")
 
 	for _, chunk := range chunks {
 		if len(strings.TrimSpace(chunk.TextContent)) < 3 {
 			continue
 		}
-		vec, err := embedder.Embed(chunk.TextContent)
+		vec, err := embed.Embed(chunk.TextContent)
 		if err != nil {
 			preview := chunk.TextContent
 			if len([]rune(preview)) > 80 {

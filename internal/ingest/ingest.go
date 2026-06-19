@@ -388,7 +388,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 		}
 
 		if vectorIngestFn != nil && len(deletedChunkIDs) > 0 {
-			vdb, err := proj.OpenCollectionVector(collectionName)
+			vdb, err := proj.OpenCollectionVector(collectionName, 0)
 			if err != nil {
 				util.Logger.Warn().Err(err).Msg("failed to open vector db for pruning")
 			} else {

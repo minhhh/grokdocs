@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/minhhh/grokdocs/internal/config"
 	"github.com/minhhh/grokdocs/internal/project"
 	"github.com/minhhh/grokdocs/internal/util"
 	"github.com/spf13/cobra"
@@ -59,6 +60,15 @@ var searchCmd = &cobra.Command{
 		limit := searchLimit * searchGroupMultiplier
 		var results []*project.FTSResult
 
+		if searchCollection == "" {
+			searchCollection = config.DefaultCollectionName
+		} else {
+			project.AssertCollectionValid(proj, searchCollection)
+		}
+
+		initEmbedder()
+		defer closeEmbedder()
+
 		switch searchMode {
 		case "fts":
 			results, err = db.SearchFTS(query, searchCollection, limit)
@@ -76,14 +86,12 @@ var searchCmd = &cobra.Command{
 				os.Exit(1)
 			}
 			var semanticResults []*project.FTSResult
-			if semanticSearchFn != nil && searchCollection != "" {
+			if semanticSearchFn != nil {
 				var semErr error
 				semanticResults, semErr = semanticSearchFn(proj, db, query, searchCollection, limit)
 				if semErr != nil {
 					util.Logger.Warn().Err(semErr).Msg("semantic search failed, using FTS only")
 				}
-			} else if searchCollection == "" {
-				util.Logger.Debug().Msg("semantic search requires --collection; using FTS only")
 			} else {
 				util.Logger.Warn().Msg("semantic search unavailable (compile with -tags onnx); using FTS only")
 			}
@@ -213,7 +221,7 @@ func readLinesOfFile(path string, start, end int) (string, error) {
 }
 
 func init() {
-	searchCmd.Flags().StringVar(&searchCollection, "collection", "", "Limit search query to the specified collection")
+	searchCmd.Flags().StringVarP(&searchCollection, "collection", "c", "", "Limit search query to the specified collection")
 	searchCmd.Flags().StringVar(&searchMode, "mode", "hybrid", "Search mode (fts, semantic, hybrid)")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 5, "Maximum number of search results to return")
 	searchCmd.Flags().Float64Var(&hybridAlpha, "alpha", 0.5, "Hybrid weight for FTS vs semantic (0=semantic only, 1=FTS only)")

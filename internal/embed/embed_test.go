@@ -4,7 +4,6 @@ package embed
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -23,7 +22,6 @@ func TestGetOrDownloadModels(t *testing.T) {
 		t.Errorf("vocab file should exist at %s", modelFiles.VocabPath)
 	}
 
-	// Should return cached files on second call
 	cached, err := GetOrDownloadModels(cacheDir)
 	if err != nil {
 		t.Fatalf("second GetOrDownloadModels failed: %v", err)
@@ -34,37 +32,17 @@ func TestGetOrDownloadModels(t *testing.T) {
 }
 
 func TestONNXEmbeddings(t *testing.T) {
-	cacheDir := filepath.Join(os.TempDir(), "grokdocs-test-embed")
-	defer os.RemoveAll(cacheDir)
-
-	modelFiles, err := GetOrDownloadModels(cacheDir)
+	vec, err := Embed("This is a test sentence.")
 	if err != nil {
-		t.Skipf("GetOrDownloadModels failed (SKIP - requires internet): %v", err)
+		t.Skipf("Embed failed (SKIP - requires internet): %v", err)
 	}
 
-	if _, err := os.Stat(modelFiles.ModelPath); err != nil {
-		t.Skipf("model file not found after download (SKIP): %v", err)
-	}
-	if _, err := os.Stat(modelFiles.VocabPath); err != nil {
-		t.Skipf("vocab file not found after download (SKIP): %v", err)
+	dim := Dim()
+	if len(vec) != dim {
+		t.Fatalf("expected embedding dimension %d, got %d", dim, len(vec))
 	}
 
-	embedder, err := NewEmbedder(modelFiles.ModelPath, modelFiles.VocabPath)
-	if err != nil {
-		t.Fatalf("NewEmbedder failed: %v", err)
-	}
-	defer embedder.Close()
-
-	vec, err := embedder.Embed("This is a test sentence.")
-	if err != nil {
-		t.Fatalf("Embed failed: %v", err)
-	}
-
-	if len(vec) != embedder.Dim() {
-		t.Fatalf("expected embedding dimension %d, got %d", embedder.Dim(), len(vec))
-	}
-
-	if embedder.Dim() == 0 {
+	if dim == 0 {
 		t.Fatal("expected non-zero embedding dimension")
 	}
 

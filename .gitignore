@@ -33,3 +33,5 @@ go.work.sum
 
 /cache
 /.grokdocs
+# Added by code-review-graph
+.code-review-graph/

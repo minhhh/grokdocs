@@ -8,14 +8,12 @@ import (
 	"github.com/minhhh/grokdocs/internal/util"
 )
 
-const DefaultVectorDim = 384
-
 type VectorDatabase struct {
 	IndexPath string
 	index     faiss.Index
 }
 
-func OpenVectorDatabase(indexPath string) (*VectorDatabase, error) {
+func OpenVectorDatabase(indexPath string, dim int) (*VectorDatabase, error) {
 	var index faiss.Index
 	if _, err := os.Stat(indexPath); err == nil {
 		idx, err := faiss.ReadIndex(indexPath, 0)
@@ -23,38 +21,14 @@ func OpenVectorDatabase(indexPath string) (*VectorDatabase, error) {
 			return nil, fmt.Errorf("read faiss index %s: %w", indexPath, err)
 		}
 		index = idx
-		util.Logger.Info().Str("path", indexPath).Int("d", index.D()).Int64("ntotal", index.Ntotal()).Msg("loaded existing FAISS index")
-	} else {
-		idx, err := faiss.IndexFactory(DefaultVectorDim, "IDMap,Flat", faiss.MetricL2)
-		if err != nil {
-			return nil, fmt.Errorf("create faiss index: %w", err)
-		}
-		index = idx
-		util.Logger.Info().Str("path", indexPath).Int("d", DefaultVectorDim).Msg("created new FAISS index")
-	}
-
-	return &VectorDatabase{
-		IndexPath: indexPath,
-		index:     index,
-	}, nil
-}
-
-func OpenVectorDatabaseWithDim(indexPath string, dim int) (*VectorDatabase, error) {
-	var index faiss.Index
-	if _, err := os.Stat(indexPath); err == nil {
-		idx, err := faiss.ReadIndex(indexPath, 0)
-		if err != nil {
-			return nil, fmt.Errorf("read faiss index %s: %w", indexPath, err)
-		}
-		index = idx
-		util.Logger.Info().Str("path", indexPath).Int("d", index.D()).Int64("ntotal", index.Ntotal()).Msg("loaded existing FAISS index")
+		util.Logger.Debug().Str("path", indexPath).Int("d", index.D()).Int64("ntotal", index.Ntotal()).Msg("loaded existing FAISS index")
 	} else {
 		idx, err := faiss.IndexFactory(dim, "IDMap,Flat", faiss.MetricL2)
 		if err != nil {
 			return nil, fmt.Errorf("create faiss index: %w", err)
 		}
 		index = idx
-		util.Logger.Info().Str("path", indexPath).Int("d", dim).Msg("created new FAISS index")
+		util.Logger.Debug().Str("path", indexPath).Int("d", dim).Msg("created new FAISS index")
 	}
 
 	return &VectorDatabase{
@@ -122,7 +96,7 @@ func (v *VectorDatabase) Close() error {
 
 func (v *VectorDatabase) Dim() int {
 	if v.index == nil {
-		return DefaultVectorDim
+		return 0
 	}
 	return v.index.D()
 }

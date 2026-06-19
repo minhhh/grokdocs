@@ -14,9 +14,16 @@ const (
 	ModelFileName = "model.onnx"
 	VocabFileName = "tokenizer.json"
 
-	embeddingDim = 384
-	maxSeqLen    = 512
+	maxSeqLen = 512
 )
+
+func DefaultCacheDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDir, ".cache", "grokdocs"), nil
+}
 
 var (
 	DefaultModelURL = fmt.Sprintf("https://huggingface.co/sentence-transformers/%s/resolve/main/onnx/model.onnx", ModelName)

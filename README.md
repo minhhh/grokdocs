@@ -188,4 +188,21 @@ workspace.
 
   - `--collection <name>`: Limit search query to the specified collection.
   - `--mode <hybrid|fts|semantics>`: Specify the search strategy (default: `hybrid`).
-  - `--limit <int>`: Number of results to return (default: 5).
+   - `--limit <int>`: Number of results to return (default: 5).
+
+### Profiling
+
+Profile CPU or memory usage by setting environment variables before running
+any command:
+
+```bash
+PPROF_CPU=cpu.pprof PPROF_MEM=mem.pprof grokdocs sync
+```
+
+After the command finishes, the profiles are written to the specified files
+for analysis with `go tool pprof`:
+
+```bash
+go tool pprof -http :8080 cpu.pprof
+go tool pprof -http :8081 mem.pprof
+```

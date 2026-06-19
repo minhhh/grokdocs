@@ -226,7 +226,7 @@ func TestDatabasesLifecycle(t *testing.T) {
 	}
 
 	// 2. Open FAISS vector database
-	vec, err := proj.OpenVector()
+	vec, err := proj.OpenVector(384)
 	if err != nil {
 		t.Fatalf("OpenVector failed: %v", err)
 	}

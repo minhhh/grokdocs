@@ -58,10 +58,14 @@ var syncCmd = &cobra.Command{
 				targets = append(targets, name)
 			}
 		} else if syncCollection != "" {
+			project.AssertCollectionValid(proj, syncCollection)
 			targets = []string{syncCollection}
 		} else {
 			targets = []string{config.DefaultCollectionName}
 		}
+
+		initEmbedder()
+		defer closeEmbedder()
 
 		for _, coll := range targets {
 			bar := progressbar.NewOptions(-1,
@@ -110,7 +114,7 @@ var syncCmd = &cobra.Command{
 
 func init() {
 	syncCmd.Flags().BoolVar(&syncAll, "all", false, "Synchronize all configured collections")
-	syncCmd.Flags().StringVar(&syncCollection, "collection", "", "Synchronize only the specified collection")
+	syncCmd.Flags().StringVarP(&syncCollection, "collection", "c", "", "Synchronize only the specified collection")
 	syncCmd.Flags().BoolVar(&syncPrune, "prune", false, "Remove orphaned file records (files deleted from disk since last sync)")
 	syncCmd.Flags().IntVar(&syncConcurrency, "concurrency", 1, "Number of files to process concurrently")
 	rootCmd.AddCommand(syncCmd)

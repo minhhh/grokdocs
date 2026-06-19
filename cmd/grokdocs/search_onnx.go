@@ -16,23 +16,12 @@ func init() {
 }
 
 func searchSemantic(proj *project.Project, ftsDB *project.FTSDatabase, query, collection string, limit int) ([]*project.FTSResult, error) {
-	mf, err := embed.GetOrDownloadModels(proj.ConfigDir)
-	if err != nil {
-		return nil, fmt.Errorf("get models: %w", err)
-	}
-
-	embedder, err := embed.NewEmbedder(mf.ModelPath, mf.VocabPath)
-	if err != nil {
-		return nil, fmt.Errorf("new embedder: %w", err)
-	}
-	defer embedder.Close()
-
-	vec, err := embedder.Embed(query)
+	vec, err := embed.Embed(query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 
-	vdb, err := proj.OpenCollectionVector(collection)
+	vdb, err := proj.OpenCollectionVector(collection, embed.Dim())
 	if err != nil {
 		return nil, fmt.Errorf("open vector db: %w", err)
 	}

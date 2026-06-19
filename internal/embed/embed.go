@@ -5,30 +5,37 @@ package embed
 import (
 	"fmt"
 	"math"
+	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
 )
 
-type EmbedderOption func(*Embedder)
-
-func WithTokenizer(t Tokenizer) EmbedderOption {
-	return func(e *Embedder) {
-		e.tokenizer = t
-	}
-}
-
 type Embedder struct {
-	session    *ort.DynamicAdvancedSession
-	inputName  string
-	outputName string
-	tokenizer  Tokenizer
-	dim        int
+	session   *ort.DynamicAdvancedSession
+	tokenizer Tokenizer
+	dim       int
 }
 
-func NewEmbedder(modelPath, vocabPath string, opts ...EmbedderOption) (*Embedder, error) {
-	tokenizer, err := NewTokenizer(vocabPath)
+var (
+	globalEmbedder   *Embedder
+	globalEmbedderMu sync.Mutex
+)
+
+func GetGlobalEmbedder() (*Embedder, error) {
+	globalEmbedderMu.Lock()
+	defer globalEmbedderMu.Unlock()
+
+	if globalEmbedder != nil {
+		return globalEmbedder, nil
+	}
+
+	cacheDir, err := DefaultCacheDir()
 	if err != nil {
-		return nil, fmt.Errorf("new tokenizer: %w", err)
+		return nil, fmt.Errorf("cache dir: %w", err)
+	}
+	mf, err := GetOrDownloadModels(cacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("get models: %w", err)
 	}
 
 	ort.SetSharedLibraryPath("/usr/local/lib/libonnxruntime.dylib")
@@ -36,55 +43,49 @@ func NewEmbedder(modelPath, vocabPath string, opts ...EmbedderOption) (*Embedder
 		return nil, fmt.Errorf("init onnx runtime: %w", err)
 	}
 
-	// Get model metadata to determine input/output names
-	inputInfo, outputInfo, err := ort.GetInputOutputInfo(modelPath)
+	inputInfo, outputInfo, err := ort.GetInputOutputInfo(mf.ModelPath)
 	if err != nil {
-		ort.DestroyEnvironment()
 		return nil, fmt.Errorf("get model IO info: %w", err)
 	}
-
 	if len(inputInfo) == 0 || len(outputInfo) == 0 {
-		ort.DestroyEnvironment()
 		return nil, fmt.Errorf("model has no inputs or outputs")
 	}
 
-	inputName := inputInfo[0].Name
-	outputName := outputInfo[0].Name
-
-	// Determine embedding dimension from output shape
-	var dim int
-	if len(outputInfo[0].Dimensions) > 0 {
-		dim = int(outputInfo[0].Dimensions[len(outputInfo[0].Dimensions)-1])
+	var inputNames []string
+	for _, in := range inputInfo {
+		inputNames = append(inputNames, in.Name)
 	}
-	if dim == 0 {
-		dim = embeddingDim
+	var outputNames []string
+	for _, out := range outputInfo {
+		outputNames = append(outputNames, out.Name)
 	}
 
-	session, err := ort.NewDynamicAdvancedSession(
-		modelPath,
-		[]string{inputName, inputInfo[1].Name, inputInfo[2].Name},
-		[]string{outputName},
-		nil,
-	)
+	dim := int(outputInfo[0].Dimensions[len(outputInfo[0].Dimensions)-1])
+
+	tokenizer, err := NewTokenizer(mf.VocabPath)
 	if err != nil {
-		ort.DestroyEnvironment()
+		return nil, fmt.Errorf("new tokenizer: %w", err)
+	}
+
+	session, err := ort.NewDynamicAdvancedSession(mf.ModelPath, inputNames, outputNames, nil)
+	if err != nil {
 		return nil, fmt.Errorf("new session: %w", err)
 	}
 
-	e := &Embedder{
-		session:    session,
-		inputName:  inputName,
-		outputName: outputName,
-		tokenizer:  tokenizer,
-		dim:        dim,
+	globalEmbedder = &Embedder{
+		session:   session,
+		tokenizer: tokenizer,
+		dim:       dim,
 	}
-	for _, opt := range opts {
-		opt(e)
-	}
-	return e, nil
+	return globalEmbedder, nil
 }
 
-func (e *Embedder) Embed(text string) ([]float32, error) {
+func Embed(text string) ([]float32, error) {
+	e, err := GetGlobalEmbedder()
+	if err != nil {
+		return nil, err
+	}
+
 	inputIDs, attentionMask, tokenTypeIDs := e.tokenizer.Encode(text, maxSeqLen)
 
 	inIDs, err := ort.NewTensor(ort.NewShape(1, int64(maxSeqLen)), inputIDs)
@@ -119,7 +120,6 @@ func (e *Embedder) Embed(text string) ([]float32, error) {
 		return nil, fmt.Errorf("unexpected output type")
 	}
 
-	// Mean pooling + L2 normalization
 	rawData := outputTensor.GetData()
 	batchSize := int(outputTensor.GetShape()[0])
 	seqLen := int(outputTensor.GetShape()[1])
@@ -129,6 +129,27 @@ func (e *Embedder) Embed(text string) ([]float32, error) {
 	l2Normalize(embedding)
 
 	return embedding, nil
+}
+
+func Dim() int {
+	e, err := GetGlobalEmbedder()
+	if err != nil {
+		return 0
+	}
+	return e.dim
+}
+
+var closeOnce sync.Once
+
+func Close() {
+	closeOnce.Do(func() {
+		globalEmbedderMu.Lock()
+		if globalEmbedder != nil && globalEmbedder.session != nil {
+			globalEmbedder.session.Destroy()
+		}
+		globalEmbedderMu.Unlock()
+		ort.DestroyEnvironment()
+	})
 }
 
 func meanPool(data []float32, batchSize, seqLen, hiddenDim int, attentionMask []int64) []float32 {
@@ -170,17 +191,4 @@ func l2Normalize(vec []float32) {
 			vec[i] /= norm
 		}
 	}
-}
-
-func (e *Embedder) Close() error {
-	var err error
-	if e.session != nil {
-		err = e.session.Destroy()
-	}
-	ort.DestroyEnvironment()
-	return err
-}
-
-func (e *Embedder) Dim() int {
-	return e.dim
 }

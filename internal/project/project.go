@@ -128,12 +128,12 @@ func (p *Project) OpenFTS() (*FTSDatabase, error) {
 }
 
 // OpenVector opens (or initializes) the FAISS vector database located in `.grokdocs/grokdocs.index`.
-func (p *Project) OpenVector() (*VectorDatabase, error) {
+func (p *Project) OpenVector(dim int) (*VectorDatabase, error) {
 	if p.vectorDB != nil {
 		return p.vectorDB, nil
 	}
 	indexPath := filepath.Join(p.ConfigDir, VectorIndexName)
-	db, err := OpenVectorDatabase(indexPath)
+	db, err := OpenVectorDatabase(indexPath, dim)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func CollectionIndexName(collection string) string {
 }
 
 // OpenCollectionVector opens (or initializes) the per-collection FAISS vector database.
-func (p *Project) OpenCollectionVector(collection string) (*VectorDatabase, error) {
+func (p *Project) OpenCollectionVector(collection string, dim int) (*VectorDatabase, error) {
 	if collection == "" {
 		return nil, fmt.Errorf("collection name is required")
 	}
@@ -158,7 +158,7 @@ func (p *Project) OpenCollectionVector(collection string) (*VectorDatabase, erro
 		return vdb, nil
 	}
 	indexPath := filepath.Join(p.ConfigDir, CollectionIndexName(collection))
-	vdb, err := OpenVectorDatabase(indexPath)
+	vdb, err := OpenVectorDatabase(indexPath, dim)
 	if err != nil {
 		return nil, err
 	}

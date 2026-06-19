@@ -11,9 +11,9 @@ func TestFAISSIndex(t *testing.T) {
 	tmpDir := t.TempDir()
 	indexPath := filepath.Join(tmpDir, "test.index")
 
-	vdb, err := OpenVectorDatabaseWithDim(indexPath, 4)
+	vdb, err := OpenVectorDatabase(indexPath, 4)
 	if err != nil {
-		t.Fatalf("OpenVectorDatabaseWithDim failed: %v", err)
+		t.Fatalf("OpenVectorDatabase failed: %v", err)
 	}
 	defer vdb.Close()
 
@@ -63,7 +63,7 @@ func TestFAISSIndex(t *testing.T) {
 
 	vdb.Close()
 
-	vdb2, err := OpenVectorDatabaseWithDim(indexPath, 4)
+	vdb2, err := OpenVectorDatabase(indexPath, 4)
 	if err != nil {
 		t.Fatalf("reopen failed: %v", err)
 	}
@@ -92,9 +92,9 @@ func TestFAISSIndexEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
 	indexPath := filepath.Join(tmpDir, "empty.index")
 
-	vdb, err := OpenVectorDatabaseWithDim(indexPath, 4)
+	vdb, err := OpenVectorDatabase(indexPath, 4)
 	if err != nil {
-		t.Fatalf("OpenVectorDatabaseWithDim failed: %v", err)
+		t.Fatalf("OpenVectorDatabase failed: %v", err)
 	}
 
 	if vdb.Len() != 0 {
@@ -107,7 +107,7 @@ func TestFAISSIndexEmpty(t *testing.T) {
 
 	vdb.Close()
 
-	vdb2, err := OpenVectorDatabaseWithDim(indexPath, 4)
+	vdb2, err := OpenVectorDatabase(indexPath, 4)
 	if err != nil {
 		t.Fatalf("reopen empty index failed: %v", err)
 	}
@@ -122,9 +122,9 @@ func TestFAISSRemoveIDs(t *testing.T) {
 	tmpDir := t.TempDir()
 	indexPath := filepath.Join(tmpDir, "remove.index")
 
-	vdb, err := OpenVectorDatabaseWithDim(indexPath, 4)
+	vdb, err := OpenVectorDatabase(indexPath, 4)
 	if err != nil {
-		t.Fatalf("OpenVectorDatabaseWithDim failed: %v", err)
+		t.Fatalf("OpenVectorDatabase failed: %v", err)
 	}
 	defer vdb.Close()
 
@@ -171,17 +171,17 @@ func TestFAISSRemoveIDs(t *testing.T) {
 	}
 }
 
-func TestFAISSIndexDefaultDim(t *testing.T) {
+func TestFAISSIndexWithDim(t *testing.T) {
 	tmpDir := t.TempDir()
-	indexPath := filepath.Join(tmpDir, "default.index")
+	indexPath := filepath.Join(tmpDir, "custom.index")
 
-	vdb, err := OpenVectorDatabase(indexPath)
+	vdb, err := OpenVectorDatabase(indexPath, 8)
 	if err != nil {
 		t.Fatalf("OpenVectorDatabase failed: %v", err)
 	}
 	defer vdb.Close()
 
-	if vdb.Dim() != DefaultVectorDim {
-		t.Errorf("expected default dim %d, got %d", DefaultVectorDim, vdb.Dim())
+	if vdb.Dim() != 8 {
+		t.Errorf("expected dim 8, got %d", vdb.Dim())
 	}
 }

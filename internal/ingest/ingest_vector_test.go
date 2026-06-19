@@ -68,7 +68,7 @@ Machine learning and search are fun.
 	}
 
 	// Open the per-collection vector DB and verify it
-	vdb, err := proj.OpenCollectionVector("default")
+	vdb, err := proj.OpenCollectionVector("default", 384)
 	if err != nil {
 		t.Fatalf("OpenCollectionVector failed: %v", err)
 	}
@@ -84,17 +84,7 @@ Machine learning and search are fun.
 	}
 
 	// Embed the query the same way the search would, then search FAISS
-	mf, err := embed.GetOrDownloadModels(proj.ConfigDir)
-	if err != nil {
-		t.Fatalf("GetOrDownloadModels failed: %v", err)
-	}
-	embedder, err := embed.NewEmbedder(mf.ModelPath, mf.VocabPath)
-	if err != nil {
-		t.Fatalf("NewEmbedder failed: %v", err)
-	}
-	defer embedder.Close()
-
-	queryVec, err := embedder.Embed("machine learning search")
+	queryVec, err := embed.Embed("machine learning search")
 	if err != nil {
 		t.Fatalf("Embed query failed: %v", err)
 	}
