@@ -9,7 +9,7 @@
 
 ### Search Command — `cmd/grokdocs/search.go`
 - `searchCmd` (line 28) — `grokdocs search [query]`
-  - Resolves `Project` via `project.FindProject(startDir)` → `proj.Init()` (line 39-45)
+  - Resolves `Project` via `project.FindProject(startDir)` -> `proj.Init()` (line 39-45)
   - Opens FTS database: `proj.OpenFTS()` (line 54)
   - Three modes (line 73-100):
     - `"fts"`: `db.SearchFTS(query, collection, limit)` (line 75)
@@ -17,15 +17,15 @@
     - `"hybrid"`: runs both FTS and semantic, then `mergeHybridResults()` (line 99)
   - `displayResults()` (line 116) — groups results by file path, prints line ranges + snippets
   - `readLinesOfFile()` (line 204) — reads source lines from disk for display
-  - `mergeHybridResults()` (line 153) — normalizes FTS BM25 scores and semantic distances, blends via `hybridAlpha` weight, sorts by blended rank
+   - `mergeHybridResults()` (line 166) — RRF (Reciprocal Rank Fusion): sums `1 / (rrfK + rank)` across FTS and semantic lists, sorts by combined score
 
 ### ONNX Semantic Search — `cmd/grokdocs/search_onnx.go` (build tag: `onnx`)
 - `init()` (line 14) — sets `semanticSearchFn = searchSemantic`
 - `searchSemantic()` (line 18):
-  - `embed.Embed(query)` → vector (line 19)
-  - `proj.OpenCollectionVector(collection, embed.Dim())` → FAISS index (line 24)
-  - `vdb.Search(vec, limit)` → labels + distances (line 29)
-  - `ftsDB.GetChunkByID(label)` → enrich results with line/section metadata (line 40)
+  - `embed.Embed(query)` -> vector (line 19)
+  - `proj.OpenCollectionVector(collection, embed.Dim())` -> FAISS index (line 24)
+  - `vdb.Search(vec, limit)` -> labels + distances (line 29)
+  - `ftsDB.GetChunkByID(label)` -> enrich results with line/section metadata (line 40)
   - Rank: `1.0 / (1.0 + distance)` (line 55)
 - `makeSnippet()` (line 62) — truncates text to `maxLen` runes
 
@@ -55,7 +55,7 @@
   - `documents`: id, file_id, collection, slug, chunk_count, total_chars, metadata
   - `chunks`: id, document_id, chunk_index, text_content, total_chars, line_start, line_end, section_num, section_title, slug, metadata
   - `chunks_fts`: FTS5 virtual table with content sync from chunks table
-- `FileRecord` (line 73), `DocumentRecord` (line 83), `ChunkRecord` (line 94), `FTSResult` (line 109)
+- `FileRecord` (line 73), `DocumentRecord` (line 83), `ChunkRecord` (line 94), `SearchResult` (line 109)
 - `OpenFTSDatabase(dbPath)` (line 122) — opens SQLite, pings
 - `InitSchema()` (line 158) — enables foreign keys, executes DDL
 - **CRUD**: `GetFile` (line 173), `SaveFile` (line 187), `GetDocument` (line 308), `SaveDocument` (line 337), `GetChunkByID` (line 507), `SaveChunksBatch` (line 465), `DeleteChunksForDocument` (line 499), `DeleteFile` (line 262), `DeleteFilesBatch` (line 273)
@@ -65,9 +65,9 @@
 
 ### `internal/project/vector.go` — FAISS Vector Database
 - `VectorDatabase` struct: wraps FAISS index with file path, mutex
-- `OpenVectorDatabase(path, dim)` → creates/loads index
-- `AddVectors(ids, vectors)` → `vdb.AddVectorsWithIDs()`
-- `Search(query, k)` → labels, distances
+- `OpenVectorDatabase(path, dim)` -> creates/loads index
+- `AddVectors(ids, vectors)` -> `vdb.AddVectorsWithIDs()`
+- `Search(query, k)` -> labels, distances
 - `RemoveIDs(ids)`, `Save()`, `Close()`, `Dim()`, `Len()`
 
 ### `internal/parser/parser.go` — Parser Registry & Dispatch
@@ -85,7 +85,7 @@
   4. Returns `("", false)` if no match
 
 ### `internal/parser/chunkx.go` — ChunkxParser
-- `CharTokenizer` (line 15): `CountTokens(text)` → `utf8.RuneCountInString(text)`
+- `CharTokenizer` (line 15): `CountTokens(text)` -> `utf8.RuneCountInString(text)`
 - `var charTok = &CharTokenizer{}` (line 21) — package-level singleton
 - `sectionHeader` (line 23): `Title`, `LineNumber`
 - `parseMarkdownHeaders(content)` (line 28) — scans lines starting with `#` followed by space
@@ -113,7 +113,7 @@
 ### `internal/embed/embed.go` (build tag: `onnx`) — Embedding
 - `Embedder` struct (line 13): `session`, `tokenizer`, `dim`
 - `GetGlobalEmbedder()` (line 24): singleton — downloads model, loads ONNX session, creates tokenizer
-- `Embed(text)` (line 83): tokenizes → ONNX inference → mean pooling → L2 normalize → returns `[]float32`
+- `Embed(text)` (line 83): tokenizes -> ONNX inference -> mean pooling -> L2 normalize -> returns `[]float32`
 - `Dim()` (line 134): returns embedding dimension
 - `Close()` (line 144): destroys session + ONNX runtime
 - `meanPool()` (line 155): attention-masked mean pooling over sequence dimension
@@ -121,11 +121,11 @@
 
 ### `internal/embed/tokenizer.go` (build tag: `onnx`)
 - `Tokenizer` interface, `UnigramTokenizer` — SentencePiece Unigram model
-- `Encode(text, maxSeqLen)` → `inputIDs`, `attentionMask`, `tokenTypeIDs`
+- `Encode(text, maxSeqLen)` -> `inputIDs`, `attentionMask`, `tokenTypeIDs`
 - NFKC normalization, SentencePiece pre-tokenization, Viterbi decoding
 
 ### `internal/embed/downloader.go` (build tag: `onnx`)
-- `GetOrDownloadModels(cacheDir)` → `ModelFiles{ModelPath, VocabPath}`
+- `GetOrDownloadModels(cacheDir)` -> `ModelFiles{ModelPath, VocabPath}`
 - Downloads model + vocab from HuggingFace, caches in `~/.cache/grokdocs/`
 
 ### `internal/ingest/ingest.go` — Ingestion Pipeline
@@ -135,7 +135,7 @@
 - `SyncCollection(proj, collectionName, progress, prune, concurrency)` (line 218):
   1. Look up collection config, build `fileFilter`
   2. Walk files (two-pass: count total, then process with concurrency semaphore)
-  3. For each file: resolve parser → `ingestFile()` → optionally `vectorIngestFn()`
+  3. For each file: resolve parser -> `ingestFile()` -> optionally `vectorIngestFn()`
   4. If `prune`: diff seen files vs DB, handle deletions/moves, remove orphaned documents
   5. Deduct moved-to files from Added/Modified counts
   6. Return `SyncResult{Unchanged, Added, Modified, Moved, Deleted}`
@@ -143,7 +143,7 @@
   1. Stat file, compute SHA256
   2. Check DB for existing file record (mtime/hash-based change detection)
   3. Create/update `FileRecord` + `DocumentRecord`
-  4. Get parser → `docParser.Parse(relPath, content)`
+  4. Get parser -> `docParser.Parse(relPath, content)`
   5. Save chunks via `SaveChunksBatch()`
 
 ### `internal/ingest/walk.go` — File Walker
@@ -168,46 +168,98 @@
 
 ## Critical Flows
 
-### Flow: File Ingestion → Chunking → Storage
+### Flow: File Ingestion -> Chunking -> Storage
 ```
 ingest.SyncCollection()
-  └─ walkFiles(ctx, absPath, fileFilter)
-       └─ for each file:
-            └─ parser.ResolveParserName(cfg, collection, relPath)
-                 ├─ collection-level Parsers map (priority: exact > extension > wildcard)
-                 └─ defaultParserMapping[ext] or defaultParserMapping[basename]
-            └─ parser.GetParser(parserName)
-            └─ ingestFile(db, relPath, absPath, collection, parserName, cfg)
-                 ├─ os.Stat(), computeSHA256()
-                 ├─ db.GetFile(relPath) → check mtime/hash → skip if unchanged
-                 ├─ db.GetDocument(fileID, collection) → delete old chunks
-                 ├─ docParser.Parse(relPath, content)
-                 │    └─ ChunkxParser.Parse()
-                 │         ├─ chunkx.NewChunker().Chunk() → []chunkx.Chunk
-                 │         ├─ parseMarkdownHeaders() → []sectionHeader
-                 │         └─ splitChunk(cx, section, meta) → []ChunkRecord
-                 └─ db.SaveChunksBatch(chunks) → single transaction
-  └─ if prune: diff DB files vs seen, delete orphans
+    -> walkFiles(ctx, absPath, fileFilter)
+        -> for each file:
+            -> parser.ResolveParserName(cfg, collection, relPath)
+                -> collection-level Parsers map (priority: exact > extension > wildcard)
+                -> defaultParserMapping[ext] or defaultParserMapping[basename]
+            -> parser.GetParser(parserName)
+            -> ingestFile(db, relPath, absPath, collection, parserName, cfg)
+                -> os.Stat(), computeSHA256()
+                -> db.GetFile(relPath) -> check mtime/hash -> skip if unchanged
+                -> db.GetDocument(fileID, collection) -> delete old chunks
+                -> docParser.Parse(relPath, content)
+                    -> ChunkxParser.Parse()
+                        -> chunkx.NewChunker().Chunk() -> []chunkx.Chunk
+                        -> parseMarkdownHeaders() -> []sectionHeader
+                        -> splitChunk(cx, section, meta) -> []ChunkRecord
+                -> db.SaveChunksBatch(chunks) -> single transaction
+    -> if prune: diff DB files vs seen, delete orphans
 ```
+
+### Flow: Chunking algorithm
+
+The `Parser` interface (`internal/parser/parser.go:22`) is the extension point for chunking. It consumes raw file content and produces a `ParsedDocument` containing a flat slice of `ChunkRecord` values:
+
+```
+Parser.Parse(relPath, content string) -> *ParsedDocument{Chunks []*ChunkRecord}
+```
+
+There is exactly one implementation (`ChunkxParser`), registered under two names (`"chunkx"` and `"markdown"`). It delegates to the third-party library `gomantics/chunkx` for AST-aware code chunking.
+
+**The adapter problem:** chunkx respects AST node boundaries, so a single node (e.g., a 3000-char docstring) can exceed `DefaultChunkMaxSizeChar` (1300). The library does not guarantee chunk size — it guarantees structural integrity. This is where the reconciliation/adapter function `splitChunk` (`internal/parser/chunkx.go:132`) comes in:
+
+```
+chunkx.NewChunker().Chunk(content) -> []chunkx.Chunk  (AST-respecting, possibly oversized)
+    -> for each chunkx.Chunk:
+        -> splitChunk(cx, sectionTitle, sectionNum, meta) -> []*ChunkRecord
+            -> if len(text) ≤ 1300 -> 1 record (pass-through)
+            -> if len(text) > 1300 -> ceil(len/1300) records (rune-split with line tracking)
+```
+
+`splitChunk` is the sole post-processing adapter. It re-splits oversized chunks by rune count, recomputing `LineStart`/`LineEnd` for each sub-chunk by counting newlines. This is necessary because chunkx's AST-driven output does not align with the target chunk size without an additional reconciliation pass.
+
+The design pattern: **third-party library produces semantically meaningful chunks -> adapter normalises them to the desired size constraint**, keeping the library swappable — any future chunking library would only need a similar adapter at the same point in the pipeline.
 
 ### Flow: Search Query
 ```
 searchCmd.Run()
-  ├─ project.FindProject(startDir) → proj.Init()
-  ├─ proj.OpenFTS() → db
-  ├─ mode == "fts":
-  │    └─ db.SearchFTS(query, collection, limit)
-  │         └─ FTS5 MATCH query on chunks_fts JOIN chunks JOIN documents
-  ├─ mode == "semantic":
-  │    └─ searchSemantic(proj, db, query, collection, limit)
-  │         ├─ embed.Embed(query) → ONNX inference → vector
-  │         ├─ proj.OpenCollectionVector() → FAISS search → labels
-  │         └─ db.GetChunkByID(label) → enrich with metadata
-  ├─ mode == "hybrid":
-  │    └─ mergeHybridResults(ftsResults, semanticResults, limit)
-  │         └─ Normalize scores, blend via hybridAlpha, sort, dedup
-  └─ displayResults() → group by file, print with line ranges
+    -> project.FindProject(startDir) -> proj.Init()
+    -> proj.OpenFTS() -> db
+    -> mode == "fts":
+        -> db.SearchFTS(query, collection, limit)
+            -> FTS5 MATCH query on chunks_fts JOIN chunks JOIN documents
+    -> mode == "semantic":
+        -> searchSemantic(proj, db, query, collection, limit)
+            -> embed.Embed(query) -> ONNX inference -> vector
+            -> proj.OpenCollectionVector() -> FAISS search -> labels
+            -> db.GetChunkByID(label) -> enrich with metadata
+    -> mode == "hybrid":
+        -> mergeHybridResults(ftsResults, semanticResults, limit)
+            -> RRF: sum 1/(k + rank) across both lists, sort by score
+    -> displayResults() -> group by file, print with line ranges
 ```
+
+### Hybrid Ranking — `mergeHybridResults` (`cmd/grokdocs/search.go:166`)
+
+The hybrid mode combines FTS and semantic results using Reciprocal Rank Fusion (RRF). Instead of blending raw scores (which are incomparable — BM25 rank vs cosine similarity), RRF converts each result list position into a rank-based score:
+
+```
+score = sum of [ 1 / (k + rank + 1) ] for every list the item appears in
+```
+
+Where `rank` is the 0-indexed position in the result list, and `k` (default 60) is a smoothing constant. A result appearing in both lists gets a score contribution from each, naturally boosting it above results found by only one method.
+
+**Code** (`cmd/grokdocs/search.go:174-182`):
+```go
+for rank, r := range fts {
+    scores[r.ID] += 1.0 / (rrfK + float64(rank) + 1)
+    seen[r.ID] = r
+}
+for rank, r := range semantic {
+    scores[r.ID] += 1.0 / (rrfK + float64(rank) + 1)
+    if _, ok := seen[r.ID]; !ok {
+        seen[r.ID] = r
+    }
+}
+```
+
+The `seen` map deduplicates by chunk ID — if the same chunk appears in both lists, the FTS `SearchResult` struct is kept (arbitrary, since both have identical metadata) and the RRF score is the sum of both contributions. Results are then sorted descending by this combined score (`search.go:191-193`) and truncated to `limit`.
+
+The `k` constant is configurable via `--rrfk` (default 60, registered at `search.go:225`). Higher `k` flattens the rank advantage (all scores closer together); lower `k` gives more weight to top-ranked results.
 
 ---
 
@@ -237,7 +289,7 @@ searchCmd.Run()
 - `TestFileWalking` — full integration: walks temp dir with `.md`/`.markdown` files, syncs collection, verifies file records in DB
 - `TestFileWalkingDefaultIncludeList` / `TestFileWalkingDefaultExcludeList` — default filter behavior
 - `TestMarkdownChunking` — parse markdown, verify LineStart/LineEnd/SectionNum/SectionTitle via table-driven test
-- `TestSyncAndSearchFTS` — full pipeline: sync → FTS search → verify results
+- `TestSyncAndSearchFTS` — full pipeline: sync -> FTS search -> verify results
 - `TestSyncCollectionWithFileFiltering` / `TestSyncSkipsUnchangedFile` / `TestSyncCollectionResult`
 - `TestSyncCollectionCollectionNotFound` / `TestSyncCollectionPathIsFile` / `TestSyncCollectionPathDoesNotExist`
 - `TestSyncWithVectors` — end-to-end with vector ingestion

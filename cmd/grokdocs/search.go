@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+	//"path/filepath"
 	"sort"
 	"strings"
 
@@ -18,12 +18,12 @@ var (
 	searchCollection      string
 	searchMode            string
 	searchLimit           int
-	hybridAlpha           float64
+	rrfK                  float64
 	searchGroupMultiplier = 5
 )
 
 // semanticSearchFn is set by onnx-enabled builds; nil otherwise.
-var semanticSearchFn func(proj *project.Project, ftsDB *project.FTSDatabase, query, collection string, limit int) ([]*project.FTSResult, error)
+var semanticSearchFn func(proj *project.Project, ftsDB *project.FTSDatabase, query, collection string, limit int) ([]*project.SearchResult, error)
 
 var searchCmd = &cobra.Command{
 	Use:   "search [query]",
@@ -59,7 +59,7 @@ var searchCmd = &cobra.Command{
 		defer proj.Close()
 
 		limit := searchLimit * searchGroupMultiplier
-		var results []*project.FTSResult
+		var results []*project.SearchResult
 
 		if searchCollection == "" {
 			searchCollection = config.DefaultCollectionName
@@ -70,6 +70,7 @@ var searchCmd = &cobra.Command{
 		initEmbedder()
 		defer closeEmbedder()
 
+		flatDisplay := false
 		switch searchMode {
 		case "fts":
 			results, err = db.SearchFTS(query, searchCollection, limit)
@@ -79,28 +80,31 @@ var searchCmd = &cobra.Command{
 				results, err = db.SearchFTS(query, searchCollection, limit)
 			} else {
 				results, err = semanticSearchFn(proj, db, query, searchCollection, limit)
+				flatDisplay = true
 			}
 		case "hybrid":
-			ftsResults, ftsErr := db.SearchFTS(query, searchCollection, limit)
-			if ftsErr != nil {
-				util.Logger.Error().Err(ftsErr).Msg("FTS search failed")
-				os.Exit(1)
+			ftsResults, err := db.SearchFTS(query, searchCollection, limit)
+			if err != nil {
+				break
 			}
-			var semanticResults []*project.FTSResult
+			var semanticResults []*project.SearchResult
 			if semanticSearchFn != nil {
 				var semErr error
 				semanticResults, semErr = semanticSearchFn(proj, db, query, searchCollection, limit)
 				if semErr != nil {
 					util.Logger.Warn().Err(semErr).Msg("semantic search failed, using FTS only")
+					break
 				}
 			} else {
 				util.Logger.Warn().Msg("semantic search unavailable (compile with -tags onnx); using FTS only")
+				break
 			}
 			results = mergeHybridResults(ftsResults, semanticResults, limit)
+			flatDisplay = true
 		}
 
 		if err != nil {
-			util.Logger.Error().Err(err).Msg("search failed")
+			util.Logger.Error().Err(err).Msg("Search failed")
 			os.Exit(1)
 		}
 
@@ -109,14 +113,14 @@ var searchCmd = &cobra.Command{
 			return
 		}
 
-		displayResults(db, proj.RootPath, results, searchLimit)
+		displayResults(db, proj.RootPath, results, searchLimit, flatDisplay)
 	},
 }
 
-func displayResults(db *project.FTSDatabase, rootPath string, results []*project.FTSResult, maxGroups int) {
+func displayResults(db *project.FTSDatabase, rootPath string, results []*project.SearchResult, limit int, flat bool) {
 	type pathResult struct {
 		filePath string
-		result   *project.FTSResult
+		result   *project.SearchResult
 	}
 	enriched := make([]pathResult, 0, len(results))
 	for _, result := range results {
@@ -125,71 +129,63 @@ func displayResults(db *project.FTSDatabase, rootPath string, results []*project
 			util.Logger.Warn().Err(err).Int64("document_id", result.DocumentID).Msg("skipping result: failed to resolve file path")
 			continue
 		}
-		enriched = append(enriched, pathResult{filePath: filepath.Join(rootPath, filePath), result: result})
+		enriched = append(enriched, pathResult{filePath: filePath, result: result})
 	}
 
-	groups := make(map[string][]*project.FTSResult)
-	order := []string{}
+	if flat {
+		for order, pr := range enriched[:limit] {
+			fmt.Printf("\n[%d] %s > %s [L%d-L%d] — score: %.3f (id: %s)\n",
+				order + 1, pr.filePath, pr.result.SectionTitle, pr.result.LineStart, pr.result.LineEnd, pr.result.Rank, pr.result.Slug)
+			fmt.Printf("  %s\n", pr.result.Snippet)
+		}
+		return
+	}
+
+	groups := make(map[string][]*project.SearchResult)
+	fileGroups := []string{}
 	for _, pr := range enriched {
 		if _, ok := groups[pr.filePath]; !ok {
-			order = append(order, pr.filePath)
+			fileGroups = append(fileGroups, pr.filePath)
 		}
 		groups[pr.filePath] = append(groups[pr.filePath], pr.result)
 	}
 
-	if len(order) > maxGroups {
-		order = order[:maxGroups]
+	if len(fileGroups) > limit {
+		fileGroups = fileGroups[:limit]
 	}
 
-	for fileGroupOrder, absPath := range order {
-		fmt.Printf("\n[%d] %s - %d chunks\n", fileGroupOrder+1, absPath, len(groups[absPath]))
-		for i, result := range groups[absPath] {
-			fmt.Printf("  [%d] %s [L%d-L%d] - score: %f (%s)\n", i+1, result.SectionTitle, result.LineStart, result.LineEnd, result.Rank, result.Slug)
+	for fileGroupOrder, finalFilePath := range fileGroups {
+		fmt.Printf("\n[%d] %s - %d chunks\n", fileGroupOrder+1, finalFilePath, len(groups[finalFilePath]))
+		for i, result := range groups[finalFilePath] {
+			fmt.Printf("  [%d] %s [L%d-L%d] - score: %.3f (%s)\n", i+1, result.SectionTitle, result.LineStart, result.LineEnd, result.Rank, result.Slug)
 			fmt.Printf("  %s\n", result.Snippet)
 		}
 	}
 }
 
-func mergeHybridResults(fts, semantic []*project.FTSResult, limit int) []*project.FTSResult {
+func mergeHybridResults(fts, semantic []*project.SearchResult, limit int) []*project.SearchResult {
 	if len(fts) == 0 && len(semantic) == 0 {
 		return nil
 	}
 
-	ftsScores := make(map[int64]float64, len(fts))
-	semScores := make(map[int64]float64, len(semantic))
+	scores := make(map[int64]float64, len(fts)+len(semantic))
+	seen := make(map[int64]*project.SearchResult, len(fts)+len(semantic))
 
-	if len(fts) > 0 {
-		maxFTS := fts[0].Rank
-		for _, r := range fts {
-			if r.Rank > maxFTS {
-				maxFTS = r.Rank
-			}
-		}
-		if maxFTS == 0 {
-			maxFTS = 1
-		}
-		for _, r := range fts {
-			ftsScores[r.ID] = r.Rank / maxFTS
+	for rank, r := range fts {
+		scores[r.ID] += 1.0 / (rrfK + float64(rank) + 1)
+		seen[r.ID] = r
+	}
+	for rank, r := range semantic {
+		scores[r.ID] += 1.0 / (rrfK + float64(rank) + 1)
+		if _, ok := seen[r.ID]; !ok {
+			seen[r.ID] = r
 		}
 	}
-	for _, r := range semantic {
-		semScores[r.ID] = r.Rank
-	}
 
-	seen := make(map[int64]bool, len(fts)+len(semantic))
-	result := make([]*project.FTSResult, 0, len(fts)+len(semantic))
-
-	for _, r := range fts {
-		seen[r.ID] = true
-		r.Rank = hybridAlpha*ftsScores[r.ID] + (1-hybridAlpha)*semScores[r.ID]
+	result := make([]*project.SearchResult, 0, len(seen))
+	for id, r := range seen {
+		r.Rank = scores[id]
 		result = append(result, r)
-	}
-	for _, r := range semantic {
-		if !seen[r.ID] {
-			seen[r.ID] = true
-			r.Rank = (1 - hybridAlpha) * r.Rank
-			result = append(result, r)
-		}
 	}
 
 	sort.Slice(result, func(i, j int) bool {
@@ -198,6 +194,7 @@ func mergeHybridResults(fts, semantic []*project.FTSResult, limit int) []*projec
 	if len(result) > limit {
 		result = result[:limit]
 	}
+
 	return result
 }
 
@@ -225,6 +222,6 @@ func init() {
 	searchCmd.Flags().StringVarP(&searchCollection, "collection", "c", "", "Limit search query to the specified collection")
 	searchCmd.Flags().StringVarP(&searchMode, "mode", "m", "hybrid", "Search mode (fts, semantic, hybrid)")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 5, "Maximum number of search results to return")
-	searchCmd.Flags().Float64Var(&hybridAlpha, "alpha", 0.5, "Hybrid weight for FTS vs semantic (0=semantic only, 1=FTS only)")
+	searchCmd.Flags().Float64Var(&rrfK, "rrfk", 60, "RRF constant k for hybrid ranking")
 	rootCmd.AddCommand(searchCmd)
 }

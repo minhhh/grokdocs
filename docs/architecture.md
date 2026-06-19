@@ -33,20 +33,16 @@ See [deconstructed.md](./deconstructed.md) for the complete file-by-file, functi
 
 ```
 Source files on disk
-  │  walk + filter
-  ▼
-ingest.SyncCollection()
-  │  per file: resolve parser → ingestFile()
-  ▼
-Parser.Parse(relPath, content)
-  │  chunkx AST-based semantic chunking
-  │  splitChunk() post-processing for oversized chunks
-  │  markdown header → section mapping
-  ▼
-ChunkRecord[] → SQLite (chunks table + FTS5 index)
-  │  optional: ONNX embed → FAISS vector index
-  ▼
-Search: FTS5 BM25 + FAISS vector (hybrid merge)
+    -> walk + filter
+        -> ingest.SyncCollection()
+            -> per file: resolve parser -> ingestFile()
+                -> Parser.Parse(relPath, content)
+                    -> chunkx AST-based semantic chunking
+                    -> splitChunk() post-processing for oversized chunks
+                    -> markdown header -> section mapping
+                -> ChunkRecord[] -> SQLite (chunks table + FTS5 index)
+                    -> optional: ONNX embed -> FAISS vector index
+    -> Search: FTS5 BM25 + FAISS vector (hybrid merge)
 ```
 
 ## Component Responsibilities
@@ -59,11 +55,11 @@ Search: FTS5 BM25 + FAISS vector (hybrid merge)
 
 ### `internal/ingest/` — File Traversal & Ingestion
 - **`SyncCollection()`**: Orchestrates ingestion — walks files, diffs against the DB (mtime/hash), processes new/changed files concurrently, optionally prunes deleted files and their chunks.
-- **`ingestFile()`**: Per-file pipeline — stat → hash → read → parse → save chunks. Uses content hashing for change detection to avoid re-indexing unchanged files.
+- **`ingestFile()`**: Per-file pipeline — stat -> hash -> read -> parse -> save chunks. Uses content hashing for change detection to avoid re-indexing unchanged files.
 - **File filtering**: Configurable include/exclude lists with `**` (double-star) glob support. Directory-walking optimization via `onlyIncludedFolders`. Sensible defaults for common documentation and source code extensions.
 
 ### `internal/embed/` (build tag: `onnx`) — Embedding
-- Singleton `Embedder` with lazy initialization. ONNX inference pipeline: tokenize (custom SentencePiece Unigram) → model forward pass → mean pooling → L2 normalization → output vector.
+- Singleton `Embedder` with lazy initialization. ONNX inference pipeline: tokenize (custom SentencePiece Unigram) -> model forward pass -> mean pooling -> L2 normalization -> output vector.
 
 ### `internal/project/` — Storage & Project Lifecycle
 - **SQLite/FTS5** (`fts.go`): Schema with 3 tables (`files`, `documents`, `chunks`) + FTS5 virtual table with auto-sync triggers. CRUD operations for all entities, batch chunk saving, FTS5 BM25 search with snippet generation.

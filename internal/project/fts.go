@@ -105,8 +105,8 @@ type ChunkRecord struct {
 	Metadata     string // JSON-encoded string
 }
 
-// FTSResult contains all matching chunk fields plus its BM25 rank score from SQLite.
-type FTSResult struct {
+// SearchResult contains all matching chunk fields plus its BM25 rank score from SQLite.
+type SearchResult struct {
 	ID           int64 // maps 1-to-1 to FAISS index IDs
 	DocumentID   int64
 	ChunkIndex   int
@@ -544,7 +544,7 @@ func (fts *FTSDatabase) GetDocumentByID(docID int64) (*DocumentRecord, error) {
 }
 
 // SearchFTS queries the FTS5 virtual table for matching text and returns matching chunks + FTS BM25 rank score.
-func (fts *FTSDatabase) SearchFTS(queryText string, collection string, limit int) ([]*FTSResult, error) {
+func (fts *FTSDatabase) SearchFTS(queryText string, collection string, limit int) ([]*SearchResult, error) {
 	fts.mu.Lock()
 	defer fts.mu.Unlock()
 	sqlQuery := `
@@ -571,9 +571,9 @@ func (fts *FTSDatabase) SearchFTS(queryText string, collection string, limit int
 	}
 	defer rows.Close()
 
-	var results []*FTSResult
+	var results []*SearchResult
 	for rows.Next() {
-		var r FTSResult
+		var r SearchResult
 		var snippet sql.NullString
 		err := rows.Scan(
 			&r.ID, &r.DocumentID, &r.ChunkIndex,

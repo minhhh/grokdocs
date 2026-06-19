@@ -19,7 +19,7 @@ const (
 	DefaultSnippetSizeChar = 50
 )
 
-func searchSemantic(proj *project.Project, ftsDB *project.FTSDatabase, query, collection string, limit int) ([]*project.FTSResult, error) {
+func searchSemantic(proj *project.Project, ftsDB *project.FTSDatabase, query, collection string, limit int) ([]*project.SearchResult, error) {
 	vec, err := embed.Embed(query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
@@ -39,7 +39,7 @@ func searchSemantic(proj *project.Project, ftsDB *project.FTSDatabase, query, co
 		return nil, nil
 	}
 
-	results := make([]*project.FTSResult, 0, len(labels))
+	results := make([]*project.SearchResult, 0, len(labels))
 	for i, label := range labels {
 		chunk, err := ftsDB.GetChunkByID(label)
 		if err != nil {
@@ -47,7 +47,7 @@ func searchSemantic(proj *project.Project, ftsDB *project.FTSDatabase, query, co
 			continue
 		}
 
-		results = append(results, &project.FTSResult{
+		results = append(results, &project.SearchResult{
 			ID:           chunk.ID,
 			DocumentID:   chunk.DocumentID,
 			ChunkIndex:   chunk.ChunkIndex,
