@@ -521,7 +521,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 
 	util.Logger.Debug().Str("path", relPath).Str("parser", parserName).Msg("Ingesting file")
 
-	parsedDoc, err := docParser.Parse(relPath, content, size)
+	parsedDoc, err := docParser.Parse(relPath, content)
 	if err != nil {
 		util.Logger.Error().Err(err).Str("path", relPath).Str("parser", parserName).Msg("failed to parse file")
 		return FileUnchanged, "", nil, err

@@ -8,7 +8,7 @@ import (
 	"github.com/minhhh/grokdocs/internal/project"
 )
 
-const DefaultChunkMaxSize = 400
+const DefaultChunkMaxSizeChar = 1300
 const DefaultChunkOverlap = 10
 
 // ParsedDocument contains document slug, metadata JSON string, and chunks.
@@ -20,7 +20,7 @@ type ParsedDocument struct {
 
 // Parser defines the behavior for a parser implementation.
 type Parser interface {
-	Parse(relPath string, content string, fileSize int64) (*ParsedDocument, error)
+	Parse(relPath string, content string) (*ParsedDocument, error)
 }
 
 // Global registry of parsers

@@ -15,6 +15,10 @@ func init() {
 	semanticSearchFn = searchSemantic
 }
 
+const (
+	DefaultSnippetSizeChar = 50
+)
+
 func searchSemantic(proj *project.Project, ftsDB *project.FTSDatabase, query, collection string, limit int) ([]*project.FTSResult, error) {
 	vec, err := embed.Embed(query)
 	if err != nil {
@@ -51,8 +55,8 @@ func searchSemantic(proj *project.Project, ftsDB *project.FTSDatabase, query, co
 			LineEnd:      chunk.LineEnd,
 			SectionTitle: chunk.SectionTitle,
 			Slug:         chunk.Slug,
-			Snippet:      makeSnippet(chunk.TextContent, 150),
-			Rank:         1.0 / (1.0 + float64(distances[i])),
+			Snippet:      makeSnippet(chunk.TextContent, DefaultSnippetSizeChar),
+			Rank:         float64(distances[i]),
 		})
 	}
 

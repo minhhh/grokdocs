@@ -23,7 +23,7 @@ func OpenVectorDatabase(indexPath string, dim int) (*VectorDatabase, error) {
 		index = idx
 		util.Logger.Debug().Str("path", indexPath).Int("d", index.D()).Int64("ntotal", index.Ntotal()).Msg("loaded existing FAISS index")
 	} else {
-		idx, err := faiss.IndexFactory(dim, "IDMap,Flat", faiss.MetricL2)
+		idx, err := faiss.IndexFactory(dim, "IDMap,Flat", faiss.MetricInnerProduct)
 		if err != nil {
 			return nil, fmt.Errorf("create faiss index: %w", err)
 		}

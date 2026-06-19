@@ -111,64 +111,60 @@ Here is some config text.
 	if !ok {
 		t.Fatal("markdown parser not registered")
 	}
-	parsed, err := p.Parse("test.md", docContent, 100)
+	parsed, err := p.Parse("test.md", docContent)
 	if err != nil {
 		t.Fatalf("Parse failed: %v", err)
 	}
-	chunks := parsed.Chunks
 
-	if len(chunks) == 0 {
-		t.Fatalf("expected some chunks to be generated, got 0")
+	docsLines := strings.Split(docContent, "\n")
+	tests := []struct {
+		name         string
+		chunk        *project.ChunkRecord
+		wantStart    int
+		wantEnd      int
+		wantSection  int
+		wantSecTitle string
+	}{
+		{
+			name:         "entire document",
+			wantStart:    1,
+			wantEnd:      10,
+			wantSection:  1,
+			wantSecTitle: "# Ingestion Setup",
+		},
 	}
 
-	// Verify sequential section increment and line mapping
-	for _, chunk := range chunks {
-		if chunk.TextContent == "" {
+	if len(parsed.Chunks) != len(tests) {
+		t.Fatalf("got %d chunks, want %d", len(parsed.Chunks), len(tests))
+	}
+
+	for i, tt := range tests {
+		c := parsed.Chunks[i]
+		if c.TextContent == "" {
 			t.Error("expected chunk text content to be populated")
 		}
-		if chunk.LineStart <= 0 || chunk.LineEnd <= 0 || chunk.LineStart > chunk.LineEnd {
-			t.Errorf("invalid line range: %d-%d", chunk.LineStart, chunk.LineEnd)
+		reconstructed := strings.Join(docsLines[c.LineStart-1:c.LineEnd], "\n")
+		if !strings.Contains(reconstructed, strings.TrimSpace(c.TextContent)) {
+			t.Errorf("reconstructed chunk text is not in original lines: %q (lines %d-%d: %q)",
+				c.TextContent, c.LineStart, c.LineEnd, reconstructed)
 		}
 
-		// Ensure text lines match original content lines
-		origLines := strings.Split(docContent, "\n")
-		reconstructed := strings.Join(origLines[chunk.LineStart-1:chunk.LineEnd], "\n")
-		// The AST chunk might trim some leading/trailing spaces/newlines, but it should be a substring
-		if !strings.Contains(reconstructed, strings.TrimSpace(chunk.TextContent)) {
-			t.Errorf("reconstructed chunk text is not in original lines: %q (lines %d-%d: %q)", chunk.TextContent, chunk.LineStart, chunk.LineEnd, reconstructed)
-		}
-
-		// Check metadata JSON structure
 		var meta map[string]any
-		if err := json.Unmarshal([]byte(chunk.Metadata), &meta); err != nil {
+		if err := json.Unmarshal([]byte(c.Metadata), &meta); err != nil {
 			t.Errorf("failed to unmarshal chunk metadata: %v", err)
 		}
 
-		if meta["filename"] != "test.md" {
-			t.Errorf("expected filename test.md, got %v", meta["filename"])
+		if c.LineStart != tt.wantStart {
+			t.Errorf("LineStart: got %d, want %d", c.LineStart, tt.wantStart)
 		}
-
-		secNum, ok := meta["section_num"].(float64)
-		if !ok {
-			t.Error("section_num must be present in metadata")
+		if c.LineEnd != tt.wantEnd {
+			t.Errorf("LineEnd: got %d, want %d", c.LineEnd, tt.wantEnd)
 		}
-
-		secTitle, ok := meta["section_title"].(string)
-		if !ok {
-			t.Error("section_title must be present in metadata")
+		if c.SectionNum != tt.wantSection {
+			t.Errorf("SectionNum: got %d, want %d", c.SectionNum, tt.wantSection)
 		}
-
-		// Verify section mapping matching
-		if chunk.LineStart < 6 {
-			// Belongs to section 1
-			if int(secNum) != 1 || secTitle != "Ingestion Setup" {
-				t.Errorf("expected section 1 'Ingestion Setup', got %d %q for lines %d-%d", int(secNum), secTitle, chunk.LineStart, chunk.LineEnd)
-			}
-		} else {
-			// Belongs to section 2
-			if int(secNum) != 2 || secTitle != "Technical Configuration" {
-				t.Errorf("expected section 2 'Technical Configuration', got %d %q for lines %d-%d", int(secNum), secTitle, chunk.LineStart, chunk.LineEnd)
-			}
+		if c.SectionTitle != tt.wantSecTitle {
+			t.Errorf("SectionTitle: got %q, want %q", c.SectionTitle, tt.wantSecTitle)
 		}
 	}
 }

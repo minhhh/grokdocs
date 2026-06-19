@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -108,11 +109,11 @@ var searchCmd = &cobra.Command{
 			return
 		}
 
-		displayResults(db, results, searchLimit)
+		displayResults(db, proj.RootPath, results, searchLimit)
 	},
 }
 
-func displayResults(db *project.FTSDatabase, results []*project.FTSResult, maxGroups int) {
+func displayResults(db *project.FTSDatabase, rootPath string, results []*project.FTSResult, maxGroups int) {
 	type pathResult struct {
 		filePath string
 		result   *project.FTSResult
@@ -124,7 +125,7 @@ func displayResults(db *project.FTSDatabase, results []*project.FTSResult, maxGr
 			util.Logger.Warn().Err(err).Int64("document_id", result.DocumentID).Msg("skipping result: failed to resolve file path")
 			continue
 		}
-		enriched = append(enriched, pathResult{filePath: filePath, result: result})
+		enriched = append(enriched, pathResult{filePath: filepath.Join(rootPath, filePath), result: result})
 	}
 
 	groups := make(map[string][]*project.FTSResult)
@@ -140,10 +141,10 @@ func displayResults(db *project.FTSDatabase, results []*project.FTSResult, maxGr
 		order = order[:maxGroups]
 	}
 
-	for fileGroupOrder, fp := range order {
-		fmt.Printf("\n[%d] %s - %d chunks\n", fileGroupOrder+1, fp, len(groups[fp]))
-		for i, result := range groups[fp] {
-			fmt.Printf("  [%d] %s [L%d-L%d] - score: %f\n", i+1, result.Slug, result.LineStart, result.LineEnd, result.Rank)
+	for fileGroupOrder, absPath := range order {
+		fmt.Printf("\n[%d] %s - %d chunks\n", fileGroupOrder+1, absPath, len(groups[absPath]))
+		for i, result := range groups[absPath] {
+			fmt.Printf("  [%d] %s [L%d-L%d] - score: %f (%s)\n", i+1, result.SectionTitle, result.LineStart, result.LineEnd, result.Rank, result.Slug)
 			fmt.Printf("  %s\n", result.Snippet)
 		}
 	}
@@ -222,7 +223,7 @@ func readLinesOfFile(path string, start, end int) (string, error) {
 
 func init() {
 	searchCmd.Flags().StringVarP(&searchCollection, "collection", "c", "", "Limit search query to the specified collection")
-	searchCmd.Flags().StringVar(&searchMode, "mode", "hybrid", "Search mode (fts, semantic, hybrid)")
+	searchCmd.Flags().StringVarP(&searchMode, "mode", "m", "hybrid", "Search mode (fts, semantic, hybrid)")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 5, "Maximum number of search results to return")
 	searchCmd.Flags().Float64Var(&hybridAlpha, "alpha", 0.5, "Hybrid weight for FTS vs semantic (0=semantic only, 1=FTS only)")
 	rootCmd.AddCommand(searchCmd)

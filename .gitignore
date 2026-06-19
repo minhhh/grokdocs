@@ -35,3 +35,6 @@ go.work.sum
 /.grokdocs
 # Added by code-review-graph
 .code-review-graph/
+
+node_modules
+opencode.json

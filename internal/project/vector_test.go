@@ -49,8 +49,8 @@ func TestFAISSIndex(t *testing.T) {
 	if resultIDs[0] != 10 {
 		t.Errorf("expected nearest neighbor ID 10, got %d", resultIDs[0])
 	}
-	if math.Abs(float64(distances[0])) > 0.001 {
-		t.Errorf("expected distance ~0 for identical vector, got %f", distances[0])
+	if math.Abs(float64(distances[0])-1.0) > 0.001 {
+		t.Errorf("expected score ~1.0 for identical vector, got %f", distances[0])
 	}
 
 	if err := vdb.Save(); err != nil {
@@ -83,8 +83,8 @@ func TestFAISSIndex(t *testing.T) {
 	if resultIDs2[0] != 10 {
 		t.Errorf("expected nearest neighbor ID 10 after reload, got %d", resultIDs2[0])
 	}
-	if math.Abs(float64(distances2[0])) > 0.001 {
-		t.Errorf("expected distance ~0 after reload, got %f", distances2[0])
+	if math.Abs(float64(distances2[0])-1.0) > 0.001 {
+		t.Errorf("expected score ~1.0 after reload, got %f", distances2[0])
 	}
 }
 

@@ -43,7 +43,6 @@ const (
 			document_id INTEGER NOT NULL,
 			chunk_index INTEGER NOT NULL,
 			text_content TEXT NOT NULL,
-			content_hash TEXT NOT NULL,
 			total_chars INTEGER NOT NULL,
 			line_start INTEGER NOT NULL,
 			line_end INTEGER NOT NULL,
@@ -97,7 +96,6 @@ type ChunkRecord struct {
 	DocumentID   int64
 	ChunkIndex   int
 	TextContent  string
-	ContentHash  string
 	TotalChars   int64
 	LineStart    int
 	LineEnd      int
@@ -375,7 +373,7 @@ func (fts *FTSDatabase) GetChunksForDocument(docID int64) ([]*ChunkRecord, error
 	fts.mu.Lock()
 	defer fts.mu.Unlock()
 	rows, err := fts.db.Query(`
-		SELECT id, document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, slug, metadata
+		SELECT id, document_id, chunk_index, text_content, total_chars, line_start, line_end, section_num, section_title, slug, metadata
 		FROM chunks WHERE document_id = ? ORDER BY chunk_index ASC`, docID)
 	if err != nil {
 		return nil, err
@@ -387,7 +385,7 @@ func (fts *FTSDatabase) GetChunksForDocument(docID int64) ([]*ChunkRecord, error
 		var record ChunkRecord
 		var metadata sql.NullString
 		err := rows.Scan(
-			&record.ID, &record.DocumentID, &record.ChunkIndex, &record.TextContent, &record.ContentHash, &record.TotalChars,
+			&record.ID, &record.DocumentID, &record.ChunkIndex, &record.TextContent, &record.TotalChars,
 			&record.LineStart, &record.LineEnd, &record.SectionNum, &record.SectionTitle, &record.Slug, &metadata,
 		)
 		if err != nil {
@@ -435,9 +433,9 @@ func (fts *FTSDatabase) SaveChunk(chunk *ChunkRecord) error {
 
 	if chunk.ID == 0 {
 		result, err := fts.db.Exec(`
-			INSERT INTO chunks (document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, slug, metadata)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			chunk.DocumentID, chunk.ChunkIndex, chunk.TextContent, chunk.ContentHash, chunk.TotalChars,
+			INSERT INTO chunks (document_id, chunk_index, text_content, total_chars, line_start, line_end, section_num, section_title, slug, metadata)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			chunk.DocumentID, chunk.ChunkIndex, chunk.TextContent, chunk.TotalChars,
 			chunk.LineStart, chunk.LineEnd, chunk.SectionNum, chunk.SectionTitle, chunk.Slug, metadata,
 		)
 		if err != nil {
@@ -451,9 +449,9 @@ func (fts *FTSDatabase) SaveChunk(chunk *ChunkRecord) error {
 	} else {
 		_, err := fts.db.Exec(`
 			UPDATE chunks
-			SET document_id = ?, chunk_index = ?, text_content = ?, content_hash = ?, total_chars = ?, line_start = ?, line_end = ?, section_num = ?, section_title = ?, slug = ?, metadata = ?
+			SET document_id = ?, chunk_index = ?, text_content = ?, total_chars = ?, line_start = ?, line_end = ?, section_num = ?, section_title = ?, slug = ?, metadata = ?
 			WHERE id = ?`,
-			chunk.DocumentID, chunk.ChunkIndex, chunk.TextContent, chunk.ContentHash, chunk.TotalChars,
+			chunk.DocumentID, chunk.ChunkIndex, chunk.TextContent, chunk.TotalChars,
 			chunk.LineStart, chunk.LineEnd, chunk.SectionNum, chunk.SectionTitle, chunk.Slug, metadata, chunk.ID,
 		)
 		if err != nil {
@@ -479,9 +477,9 @@ func (fts *FTSDatabase) SaveChunksBatch(chunks []*ChunkRecord) error {
 			metadata = chunk.Metadata
 		}
 		result, err := tx.Exec(`
-			INSERT INTO chunks (document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, slug, metadata)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			chunk.DocumentID, chunk.ChunkIndex, chunk.TextContent, chunk.ContentHash, chunk.TotalChars,
+			INSERT INTO chunks (document_id, chunk_index, text_content, total_chars, line_start, line_end, section_num, section_title, slug, metadata)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			chunk.DocumentID, chunk.ChunkIndex, chunk.TextContent, chunk.TotalChars,
 			chunk.LineStart, chunk.LineEnd, chunk.SectionNum, chunk.SectionTitle, chunk.Slug, metadata,
 		)
 		if err != nil {
@@ -510,12 +508,12 @@ func (fts *FTSDatabase) GetChunkByID(id int64) (*ChunkRecord, error) {
 	fts.mu.Lock()
 	defer fts.mu.Unlock()
 	row := fts.db.QueryRow(`
-		SELECT id, document_id, chunk_index, text_content, content_hash, total_chars, line_start, line_end, section_num, section_title, slug, metadata
+		SELECT id, document_id, chunk_index, text_content, total_chars, line_start, line_end, section_num, section_title, slug, metadata
 		FROM chunks WHERE id = ?`, id)
 	var record ChunkRecord
 	var metadata sql.NullString
 	err := row.Scan(
-		&record.ID, &record.DocumentID, &record.ChunkIndex, &record.TextContent, &record.ContentHash, &record.TotalChars,
+		&record.ID, &record.DocumentID, &record.ChunkIndex, &record.TextContent, &record.TotalChars,
 		&record.LineStart, &record.LineEnd, &record.SectionNum, &record.SectionTitle, &record.Slug, &metadata,
 	)
 	if err != nil {

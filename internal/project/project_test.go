@@ -324,7 +324,6 @@ func TestSQLiteDatabase(t *testing.T) {
 		DocumentID:   doc.ID,
 		ChunkIndex:   0,
 		TextContent:  "Grokdocs is a local-first semantic search engine.",
-		ContentHash:  "chunk-hash-1",
 		TotalChars:   49,
 		LineStart:    1,
 		LineEnd:      5,
@@ -337,7 +336,6 @@ func TestSQLiteDatabase(t *testing.T) {
 		DocumentID:   doc.ID,
 		ChunkIndex:   1,
 		TextContent:  "It uses SQLite FTS5 and FAISS for hybrid retrieval.",
-		ContentHash:  "chunk-hash-2",
 		TotalChars:   50,
 		LineStart:    6,
 		LineEnd:      10,
@@ -503,7 +501,6 @@ func TestGetStats(t *testing.T) {
 		DocumentID:  doc1.ID,
 		ChunkIndex:  0,
 		TextContent: "hello world notes",
-		ContentHash: "hash-c1",
 		TotalChars:  17,
 		Slug:        "",
 	}
@@ -537,7 +534,6 @@ func TestGetStats(t *testing.T) {
 		DocumentID:  doc2.ID,
 		ChunkIndex:  0,
 		TextContent: "hello wiki first chunk",
-		ContentHash: "hash-c2a",
 		TotalChars:  22,
 		Slug:        "",
 	}
@@ -545,7 +541,6 @@ func TestGetStats(t *testing.T) {
 		DocumentID:  doc2.ID,
 		ChunkIndex:  1,
 		TextContent: "hello wiki second chunk",
-		ContentHash: "hash-c2b",
 		TotalChars:  23,
 		Slug:        "",
 	}
