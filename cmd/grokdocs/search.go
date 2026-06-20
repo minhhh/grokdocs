@@ -133,6 +133,9 @@ func displayResults(db *project.FTSDatabase, rootPath string, results []*project
 	}
 
 	if flat {
+		if limit > len(enriched) {
+			limit = len(enriched)
+		}
 		for order, pr := range enriched[:limit] {
 			fmt.Printf("\n[%d] %s > %s [L%d-L%d] — score: %.3f (id: %s)\n",
 				order + 1, pr.filePath, pr.result.SectionTitle, pr.result.LineStart, pr.result.LineEnd, pr.result.Rank, pr.result.Slug)

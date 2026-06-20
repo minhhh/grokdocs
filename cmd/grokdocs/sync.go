@@ -115,7 +115,7 @@ var syncCmd = &cobra.Command{
 func init() {
 	syncCmd.Flags().BoolVar(&syncAll, "all", false, "Synchronize all configured collections")
 	syncCmd.Flags().StringVarP(&syncCollection, "collection", "c", "", "Synchronize only the specified collection")
-	syncCmd.Flags().BoolVar(&syncPrune, "prune", false, "Remove orphaned file records (files deleted from disk since last sync)")
+	syncCmd.Flags().BoolVar(&syncPrune, "prune", true, "Remove orphaned file records (files deleted from disk since last sync)")
 	syncCmd.Flags().IntVar(&syncConcurrency, "concurrency", 1, "Number of files to process concurrently")
 	rootCmd.AddCommand(syncCmd)
 }

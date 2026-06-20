@@ -554,6 +554,163 @@ func TestSyncCollectionResult(t *testing.T) {
 	}
 }
 
+func TestSyncCollectionExcludesPreviouslySyncedFile(t *testing.T) {
+	root := t.TempDir()
+
+	docsDir := filepath.Join(root, "docs")
+	if err := os.MkdirAll(docsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".grokdocs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, root, "docs/intro.md", "# Intro\nWelcome.")
+	writeFile(t, root, "docs/guide.md", "# Guide\nFollow along.")
+	writeFile(t, root, "docs/old-api.md", "# Old API\nDeprecated.")
+
+	proj, err := project.NewProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj.Config = &config.Config{
+		Collections: map[string]config.CollectionConfig{
+			"default": {
+				Path:    "docs",
+				Parsers: map[string]string{".md": "markdown"},
+				Include: []string{"*.md"},
+			},
+		},
+	}
+
+	db, err := proj.OpenFTS()
+	if err != nil {
+		t.Fatalf("OpenFTS failed: %v", err)
+	}
+	defer db.Close()
+
+	// First sync — all 3 .md files included
+	firstResult, err := SyncCollection(proj, "default", nil, true, 1)
+	if err != nil {
+		t.Fatalf("first SyncCollection failed: %v", err)
+	}
+
+	if firstResult.Added != 3 {
+		t.Errorf("expected 3 added on first sync, got %d", firstResult.Added)
+	}
+	if firstResult.Unchanged != 0 {
+		t.Errorf("expected 0 unchanged on first sync, got %d", firstResult.Unchanged)
+	}
+
+	for _, name := range []string{"docs/intro.md", "docs/guide.md", "docs/old-api.md"} {
+		if _, err := db.GetFile(name); err != nil {
+			t.Errorf("expected %s to be synced after first sync: %v", name, err)
+		}
+	}
+
+	var docCountBefore int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM documents").Scan(&docCountBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	// Collect chunk IDs for old-api.md to verify vector removal later
+	var oldAPIDocID int64
+	if err := db.DB().QueryRow("SELECT id FROM documents WHERE slug = 'default--docs--old-api-md'").Scan(&oldAPIDocID); err != nil {
+		t.Fatalf("failed to find document for old-api.md: %v", err)
+	}
+	rows, err := db.DB().Query("SELECT id FROM chunks WHERE document_id = ?", oldAPIDocID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var oldChunkIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		oldChunkIDs = append(oldChunkIDs, id)
+	}
+	rows.Close()
+
+	vdb, vdbErr := proj.OpenCollectionVector("default", 384)
+	var vdbLenBefore int64
+	if vdbErr == nil {
+		vdbLenBefore = vdb.Len()
+	}
+
+	// Change config to exclude old-api.md
+	proj.Config.Collections["default"] = config.CollectionConfig{
+		Path:    "docs",
+		Parsers: map[string]string{".md": "markdown"},
+		Include: []string{"*.md"},
+		Exclude: []string{"old-api.md"},
+	}
+
+	// Second sync with prune — old-api.md should be removed
+	secondResult, err := SyncCollection(proj, "default", nil, true, 1)
+	if err != nil {
+		t.Fatalf("second SyncCollection failed: %v", err)
+	}
+
+	if secondResult.Deleted != 1 {
+		t.Errorf("expected 1 deleted, got %d", secondResult.Deleted)
+	}
+	if secondResult.Added != 0 {
+		t.Errorf("expected 0 added, got %d", secondResult.Added)
+	}
+	if secondResult.Unchanged != 2 {
+		t.Errorf("expected 2 unchanged, got %d", secondResult.Unchanged)
+	}
+
+	// Verify excluded file record is gone
+	if _, err := db.GetFile("docs/old-api.md"); err == nil {
+		t.Error("expected old-api.md to be deleted from DB after config change")
+	}
+
+	// Verify remaining files still exist
+	for _, name := range []string{"docs/intro.md", "docs/guide.md"} {
+		if _, err := db.GetFile(name); err != nil {
+			t.Errorf("expected %s to still exist: %v", name, err)
+		}
+	}
+
+	// Verify documents were cleaned up
+	var docCountAfter int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM documents").Scan(&docCountAfter); err != nil {
+		t.Fatal(err)
+	}
+	if docCountAfter >= docCountBefore {
+		t.Errorf("expected document count to decrease after pruning excluded file, before=%d after=%d", docCountBefore, docCountAfter)
+	}
+
+	// Verify chunks for the excluded file are gone
+	var chunkCount int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM chunks WHERE slug LIKE 'default--docs--old-api-md%'`).Scan(&chunkCount); err != nil {
+		t.Fatal(err)
+	}
+	if chunkCount != 0 {
+		t.Errorf("expected 0 chunks for excluded file, got %d", chunkCount)
+	}
+
+	// Verify vectors for the excluded file are removed from FAISS
+	if vdbErr == nil {
+		if vdb.Len() > 0 {
+			// Search for a vector that belonged to old-api.md — it should still
+			// return results (just different ones), but the old IDs must be gone.
+			// The simplest check: total vector count decreased by number of chunks removed.
+			expectedVectors := vdbLenBefore - int64(len(oldChunkIDs))
+			if vdb.Len() != expectedVectors {
+				t.Errorf("expected %d vectors after pruning (was %d, removed %d), got %d",
+					expectedVectors, vdbLenBefore, len(oldChunkIDs), vdb.Len())
+			}
+		} else {
+			t.Log("vector DB is empty — vector ingestion likely unavailable, skipping FAISS verification")
+		}
+	} else {
+		t.Logf("no per-collection vector DB — skipping FAISS verification: %v", vdbErr)
+	}
+}
+
 func TestSyncCollectionCollectionNotFound(t *testing.T) {
 	root := t.TempDir()
 	proj, err := project.NewProject(root)
