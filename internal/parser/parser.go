@@ -8,8 +8,11 @@ import (
 	"github.com/minhhh/grokdocs/internal/project"
 )
 
-const DefaultChunkMaxSizeChar = 1300
-const DefaultChunkOverlap = 10
+var (
+	DefaultChunkMaxSizeChar = 1500
+	DefaultChunkMinSizeChar = 800
+	DefaultChunkOverlap   float64  = 10
+)
 
 // ParsedDocument contains document slug, metadata JSON string, and chunks.
 type ParsedDocument struct {

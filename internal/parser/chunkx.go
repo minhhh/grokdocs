@@ -141,7 +141,7 @@ func splitChunk(cx chunkx.Chunk, sectionTitle string, sectionNum int, meta strin
 	if numChars <= DefaultChunkMaxSizeChar {
 		return []*project.ChunkRecord{{
 			TextContent:  cx.Content,
-			TotalChars:   int64(numChars),
+			TotalChars:   numChars,
 			LineStart:    cx.StartLine,
 			LineEnd:      cx.EndLine,
 			SectionNum:   sectionNum,
@@ -171,7 +171,7 @@ func splitChunk(cx chunkx.Chunk, sectionTitle string, sectionNum int, meta strin
 		}
 		out = append(out, &project.ChunkRecord{
 			TextContent:  subContent,
-			TotalChars:   int64(subChars),
+			TotalChars:   subChars,
 			LineStart:    lineStart,
 			LineEnd:      lineEnd,
 			SectionNum:   sectionNum,
@@ -185,5 +185,4 @@ func splitChunk(cx chunkx.Chunk, sectionTitle string, sectionNum int, meta strin
 
 func init() {
 	RegisterParser("chunkx", &ChunkxParser{})
-	RegisterParser("markdown", &ChunkxParser{DefaultLanguage: languages.Markdown})
 }

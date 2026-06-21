@@ -8,6 +8,7 @@
 - `init()` (line 49) — registers `--project`, `--verbose`, `--log-format` flags
 
 ### Search Command — `cmd/grokdocs/search.go`
+
 - `searchCmd` (line 28) — `grokdocs search [query]`
   - Resolves `Project` via `project.FindProject(startDir)` -> `proj.Init()` (line 39-45)
   - Opens FTS database: `proj.OpenFTS()` (line 54)
@@ -20,6 +21,7 @@
    - `mergeHybridResults()` (line 166) — RRF (Reciprocal Rank Fusion): sums `1 / (rrfK + rank)` across FTS and semantic lists, sorts by combined score
 
 ### ONNX Semantic Search — `cmd/grokdocs/search_onnx.go` (build tag: `onnx`)
+
 - `init()` (line 14) — sets `semanticSearchFn = searchSemantic`
 - `searchSemantic()` (line 18):
   - `embed.Embed(query)` -> vector (line 19)

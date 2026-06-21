@@ -422,8 +422,6 @@ func TestChunkxParserSingleLongNode(t *testing.T) {
 
 	for i, c := range doc.Chunks {
 		w := want[i]
-		//t.Logf("chunk[%d]: TotalChars=%d LineStart=%d LineEnd=%d", i, c.TotalChars, c.LineStart, c.LineEnd)
-		//t.Logf("%s", c.TextContent)
 		if c.ChunkIndex != w.ChunkIndex ||
 			c.TotalChars != w.TotalChars ||
 			c.LineStart != w.LineStart ||

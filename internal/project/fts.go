@@ -96,7 +96,7 @@ type ChunkRecord struct {
 	DocumentID   int64
 	ChunkIndex   int
 	TextContent  string
-	TotalChars   int64
+	TotalChars   int
 	LineStart    int
 	LineEnd      int
 	SectionNum   int

@@ -2,7 +2,6 @@ package ingest
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,80 +91,6 @@ func TestFileWalking(t *testing.T) {
 	}
 	if _, err := db.GetFile(".grokdocs/config.yaml"); err == nil {
 		t.Error(".grokdocs/config.yaml should not be synced")
-	}
-}
-
-func TestMarkdownChunking(t *testing.T) {
-	docContent := `# Ingestion Setup
-
-This is the introduction section.
-It spans multiple lines.
-
-## Technical Configuration
-
-This is the configuration section.
-Here is some config text.
-`
-
-	p, ok := parser.GetParser("markdown")
-	if !ok {
-		t.Fatal("markdown parser not registered")
-	}
-	parsed, err := p.Parse("test.md", docContent)
-	if err != nil {
-		t.Fatalf("Parse failed: %v", err)
-	}
-
-	docsLines := strings.Split(docContent, "\n")
-	tests := []struct {
-		name         string
-		chunk        *project.ChunkRecord
-		wantStart    int
-		wantEnd      int
-		wantSection  int
-		wantSecTitle string
-	}{
-		{
-			name:         "entire document",
-			wantStart:    1,
-			wantEnd:      10,
-			wantSection:  1,
-			wantSecTitle: "# Ingestion Setup",
-		},
-	}
-
-	if len(parsed.Chunks) != len(tests) {
-		t.Fatalf("got %d chunks, want %d", len(parsed.Chunks), len(tests))
-	}
-
-	for i, tt := range tests {
-		c := parsed.Chunks[i]
-		if c.TextContent == "" {
-			t.Error("expected chunk text content to be populated")
-		}
-		reconstructed := strings.Join(docsLines[c.LineStart-1:c.LineEnd], "\n")
-		if !strings.Contains(reconstructed, strings.TrimSpace(c.TextContent)) {
-			t.Errorf("reconstructed chunk text is not in original lines: %q (lines %d-%d: %q)",
-				c.TextContent, c.LineStart, c.LineEnd, reconstructed)
-		}
-
-		var meta map[string]any
-		if err := json.Unmarshal([]byte(c.Metadata), &meta); err != nil {
-			t.Errorf("failed to unmarshal chunk metadata: %v", err)
-		}
-
-		if c.LineStart != tt.wantStart {
-			t.Errorf("LineStart: got %d, want %d", c.LineStart, tt.wantStart)
-		}
-		if c.LineEnd != tt.wantEnd {
-			t.Errorf("LineEnd: got %d, want %d", c.LineEnd, tt.wantEnd)
-		}
-		if c.SectionNum != tt.wantSection {
-			t.Errorf("SectionNum: got %d, want %d", c.SectionNum, tt.wantSection)
-		}
-		if c.SectionTitle != tt.wantSecTitle {
-			t.Errorf("SectionTitle: got %q, want %q", c.SectionTitle, tt.wantSecTitle)
-		}
 	}
 }
 

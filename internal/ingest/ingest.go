@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/minhhh/grokdocs/internal/config"
 	"github.com/minhhh/grokdocs/internal/parser"
@@ -529,7 +530,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 
 	docRecord.Slug = makeSlug(collectionName, relPath)
 	docRecord.ChunkCount = len(parsedDoc.Chunks)
-	docRecord.TotalChars = int64(len(content))
+	docRecord.TotalChars = int64(utf8.RuneCountInString(content))
 	docRecord.Metadata = parsedDoc.Metadata
 
 	if err := db.SaveDocument(docRecord); err != nil {
