@@ -35,7 +35,6 @@
   - Sub-chunks are embedded into FAISS (sub-chunk ID as label), parent chunks stored in SQLite with content
   - Search returns sub-chunk IDs → lookup `parent_id` in `sub_chunks` → get parent's file path and line range → LLM reads source file directly
   - Pruning: when parent chunks are deleted, `ON DELETE CASCADE` removes `sub_chunks` rows. Before deletion, collect affected sub-chunk IDs via `SELECT id FROM sub_chunks WHERE parent_id IN (...)`, then call `vdb.RemoveIDs(ids)`
-- [ ] **us-xx**: Create tests for checking if sync stats of unchanged, added, deleted, etc are correct
 
 ---
 

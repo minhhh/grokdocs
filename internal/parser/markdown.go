@@ -192,7 +192,7 @@ func findSplit(cur chunkBuffer, lines []string, maxChars int, minChars int) (spl
 			if unicode.IsSpace(runes[j]) {
 				tentativeTotalChar := totalChars - lineLen + j + 1
 				if tentativeTotalChar <= maxChars && tentativeTotalChar >= minChars {
-					return i, len(line) - j - 1
+					return i, lineLen - j - 1
 				}
 			}
 		}
@@ -210,7 +210,7 @@ func findSplit(cur chunkBuffer, lines []string, maxChars int, minChars int) (spl
 		for j := lineLen - 1; j >=0; j-- {
 			tentativeTotalChar := totalChars - lineLen + j + 1
 			if tentativeTotalChar <= maxChars && tentativeTotalChar >= minChars {
-				return i, len(line) - j - 1
+				return i, lineLen - j - 1
 			}
 		}
 

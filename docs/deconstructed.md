@@ -1,5 +1,7 @@
 # grokdocs — Deconstructed Code Reference
 
+**Note on DefaultChunkMaxSizeChar:** The constant is `1500` in `parser.go:12`. Tests and older comments may reference `1300` — those refer to a previous value before the default was raised. All production codepaths use the current `1500`.
+
 ## Entry Points
 
 ### CLI Bootstrap — `cmd/grokdocs/root.go`
@@ -184,15 +186,21 @@ ingest.SyncCollection()
                 -> db.GetFile(relPath) -> check mtime/hash -> skip if unchanged
                 -> db.GetDocument(fileID, collection) -> delete old chunks
                 -> docParser.Parse(relPath, content)
-                    -> ChunkxParser.Parse()
-                        -> chunkx.NewChunker().Chunk() -> []chunkx.Chunk
-                        -> parseMarkdownHeaders() -> []sectionHeader
-                        -> splitChunk(cx, section, meta) -> []ChunkRecord
+                    -> if parser == "markdown":
+                        -> MarkdownParser.Parse()
+                            -> line-by-line accumulation
+                            -> findSplit() (4-tier: blank > sentence > word > anywhere)
+                            -> flush() -> []ChunkRecord
+                    -> if parser == "chunkx":
+                        -> ChunkxParser.Parse()
+                            -> chunkx.NewChunker().Chunk() -> []chunkx.Chunk
+                            -> parseMarkdownHeaders() -> []sectionHeader
+                            -> splitChunk(cx, section, meta) -> []ChunkRecord
                 -> db.SaveChunksBatch(chunks) -> single transaction
     -> if prune: diff DB files vs seen, delete orphans
 ```
 
-### Flow: Chunking algorithm
+### Flow: Chunking algorithm — `ChunkxParser`
 
 The `Parser` interface (`internal/parser/parser.go:22`) is the extension point for chunking. It consumes raw file content and produces a `ParsedDocument` containing a flat slice of `ChunkRecord` values:
 
@@ -200,21 +208,67 @@ The `Parser` interface (`internal/parser/parser.go:22`) is the extension point f
 Parser.Parse(relPath, content string) -> *ParsedDocument{Chunks []*ChunkRecord}
 ```
 
-There is exactly one implementation (`ChunkxParser`), registered under two names (`"chunkx"` and `"markdown"`). It delegates to the third-party library `gomantics/chunkx` for AST-aware code chunking.
+There are two implementations: `ChunkxParser` (registered as `"chunkx"` and `"markdown"`) and `MarkdownParser` (registered as `"markdown"`). Both are registered at init time; the extension-based dispatch in `defaultParserMapping` routes `.md`/`.markdown` to `"markdown"`, and everything else to `"chunkx"`.
 
-**The adapter problem:** chunkx respects AST node boundaries, so a single node (e.g., a 3000-char docstring) can exceed `DefaultChunkMaxSizeChar` (1300). The library does not guarantee chunk size — it guarantees structural integrity. This is where the reconciliation/adapter function `splitChunk` (`internal/parser/chunkx.go:132`) comes in:
+**ChunkxParser** delegates to the third-party library `gomantics/chunkx` for AST-aware code chunking.
+
+**The adapter problem:** chunkx respects AST node boundaries, so a single node (e.g., a 3000-char docstring) can exceed `DefaultChunkMaxSizeChar` (1500). The library does not guarantee chunk size — it guarantees structural integrity. This is where the reconciliation/adapter function `splitChunk` (`internal/parser/chunkx.go:132`) comes in:
 
 ```
 chunkx.NewChunker().Chunk(content) -> []chunkx.Chunk  (AST-respecting, possibly oversized)
     -> for each chunkx.Chunk:
         -> splitChunk(cx, sectionTitle, sectionNum, meta) -> []*ChunkRecord
-            -> if len(text) ≤ 1300 -> 1 record (pass-through)
-            -> if len(text) > 1300 -> ceil(len/1300) records (rune-split with line tracking)
+            -> if numChars ≤ 1500 -> 1 record (pass-through)
+            -> if numChars > 1500 -> ceil(numChars/1500) records (rune-split with line tracking)
 ```
 
 `splitChunk` is the sole post-processing adapter. It re-splits oversized chunks by rune count, recomputing `LineStart`/`LineEnd` for each sub-chunk by counting newlines. This is necessary because chunkx's AST-driven output does not align with the target chunk size without an additional reconciliation pass.
 
 The design pattern: **third-party library produces semantically meaningful chunks -> adapter normalises them to the desired size constraint**, keeping the library swappable — any future chunking library would only need a similar adapter at the same point in the pipeline.
+
+### Flow: Chunking algorithm — `MarkdownParser`
+
+* `MarkdownParser` (`internal/parser/markdown.go`) is a purpose-built, line-oriented markdown chunker that respects heading boundaries and uses a 4-tier split strategy
+    * It tries to split by headings, then paragraph, then sentence, then words
+
+**Constants** (`parser.go:12-14`):
+- `DefaultChunkMaxSizeChar = 1500` — hard upper bound on chunk rune length
+- `DefaultChunkMinSizeChar = 800` — soft lower bound; flushes at heading boundaries only above this
+
+**`Parse` loop** (`markdown.go:51-151`):
+
+1. Split content on `\n` into `lines`
+2. Maintain a `chunkBuffer` (`markdown.go:42-49`):
+   - `lines []int` — indices into the `lines` slice currently in the buffer
+   - `startLine`, `startPos` — for partial-line tracking (mid-line splits)
+   - `charCount` — cumulative rune count of buffered lines (+1 for `\n` per line)
+   - `sectionNum`, `sectionTitle` — current heading context
+
+3. Iterate lines:
+   - **Heading lines** (`parseMdHeading`, line 121): if `charCount >= min (800)`, flush the buffer first. Then increment section, add heading line to new buffer.
+   - **Content lines** (line 135): append line to buffer, add `lineChars + 1` to `charCount`.
+   - **Overflow guard** (line 138): `for cur.charCount > max (1500)`, call `findSplit` + `flush`.
+
+4. Final flush at end of file (line 144).
+
+**`findSplit` — 4-tier split strategy** (`markdown.go:154-220`):
+
+Walk the buffer backward, trying each tier in order. Each tier tries to find a split point where the tail part's character count falls within `[min, max]`.
+
+| Tier | What it finds | Precedence |
+|------|---------------|------------|
+| **1. Blank line** | A blank line (`strings.TrimSpace(line) == ""`) where removing it and everything after brings `totalChars` into `[min, max]` | Highest — cleanest split |
+| **2. Sentence separator** | A `.`, `!`, or `?` rune within a line where splitting there brings the tail into `[min, max]` | |
+| **3. Word separator** | A `unicode.IsSpace` rune (same logic) | |
+| **4. Anywhere** | Any rune position (same logic) | Lowest — last resort |
+
+If no tier succeeds, returns `(0, 0)` (split at buffer start).
+
+Returns `(splitLine, reverseEndPos)` where:
+- `splitLine` = index into `cur.lines` where the split occurs
+- `reverseEndPos` = number of runes from the end of that line to skip (0 = take whole line)
+
+
 
 ### Flow: Search Query
 ```
