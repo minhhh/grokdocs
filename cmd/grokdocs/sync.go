@@ -16,10 +16,11 @@ import (
 )
 
 	var (
-		syncAll        bool
-		syncCollection string
-		syncPrune      bool
+		syncAll         bool
+		syncCollection  string
+		syncPrune       bool
 		syncConcurrency int
+		syncEmbed       bool
 	)
 
 var syncCmd = &cobra.Command{
@@ -64,8 +65,10 @@ var syncCmd = &cobra.Command{
 			targets = []string{config.DefaultCollectionName}
 		}
 
-		initEmbedder()
-		defer closeEmbedder()
+		if syncEmbed {
+			initEmbedder()
+			defer closeEmbedder()
+		}
 
 		for _, coll := range targets {
 			bar := progressbar.NewOptions(-1,
@@ -75,25 +78,31 @@ var syncCmd = &cobra.Command{
 				progressbar.OptionThrottle(100*time.Millisecond),
 			)
 
-			progress := util.NewGuardedChan[ingest.SyncProgress](0)
+			progress := util.NewGuardedChan[ingest.SyncProgress](10)
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				for progressUpdate := range progress.Ch() {
-					if progressUpdate.TotalFiles > 0 {
-						bar.ChangeMax(progressUpdate.TotalFiles)
-						if progressUpdate.FilesProcessed == progressUpdate.TotalFiles {
-							bar.Finish()
-							break
+					switch progressUpdate.Phase {
+					case "Processing":
+						if progressUpdate.TotalFiles > 0 {
+							bar.ChangeMax(progressUpdate.TotalFiles)
+							if progressUpdate.FilesProcessed == progressUpdate.TotalFiles {
+								bar.Finish()
+								fmt.Fprintln(os.Stderr)
+							}
 						}
+						if !bar.IsFinished() {
+							bar.Set(progressUpdate.FilesProcessed)
+						}
+					case "Embedding":
+						fmt.Fprintf(os.Stderr, "Embedding %d chunks...\n", progressUpdate.TotalFiles)
 					}
-					bar.Set(progressUpdate.FilesProcessed)
 				}
-				fmt.Fprintln(os.Stderr)
 			}()
 
-			result, err := ingest.SyncCollection(proj, coll, progress, syncPrune, syncConcurrency)
+			result, err := ingest.SyncCollection(proj, coll, progress, syncPrune, syncConcurrency, syncEmbed)
 			progress.Close()
 			wg.Wait()
 
@@ -117,5 +126,6 @@ func init() {
 	syncCmd.Flags().StringVarP(&syncCollection, "collection", "c", "", "Synchronize only the specified collection")
 	syncCmd.Flags().BoolVar(&syncPrune, "prune", true, "Remove orphaned file records (files deleted from disk since last sync)")
 	syncCmd.Flags().IntVar(&syncConcurrency, "concurrency", 1, "Number of files to process concurrently")
+	syncCmd.Flags().BoolVar(&syncEmbed, "embed", false, "Compute and store vector embeddings during sync")
 	rootCmd.AddCommand(syncCmd)
 }

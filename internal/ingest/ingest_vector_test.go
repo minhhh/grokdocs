@@ -54,7 +54,7 @@ Machine learning and search are fun.
 	defer db.Close()
 
 	// Sync should embed chunks and push to FAISS (or skip gracefully if model unavailable)
-	if _, err := SyncCollection(proj, "default", nil, true, 1); err != nil {
+	if _, err := SyncCollection(proj, "default", nil, true, 1, false); err != nil {
 		t.Fatalf("SyncCollection failed: %v", err)
 	}
 

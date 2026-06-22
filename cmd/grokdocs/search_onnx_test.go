@@ -49,7 +49,7 @@ func TestSearchSemanticLimitExceedsAvailable(t *testing.T) {
 	defer closeEmbedder()
 
 	// Sync — produces vectors for the single chunk
-	if _, err := ingest.SyncCollection(proj, "default", nil, true, 1); err != nil {
+	if _, err := ingest.SyncCollection(proj, "default", nil, true, 1, false); err != nil {
 		t.Fatalf("SyncCollection failed: %v", err)
 	}
 

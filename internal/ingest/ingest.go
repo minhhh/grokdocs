@@ -216,7 +216,7 @@ func walkFiles(ctx context.Context, collectionRoot string, filter *fileFilter) <
 	return ch
 }
 
-func SyncCollection(proj *project.Project, collectionName string, progress *util.GuardedChan[SyncProgress], prune bool, concurrency int) (SyncResult, error) {
+func SyncCollection(proj *project.Project, collectionName string, progress *util.GuardedChan[SyncProgress], prune bool, concurrency int, syncEmbed bool) (SyncResult, error) {
 	cfg, ok := proj.Config.Collections[collectionName]
 	if !ok {
 		util.Logger.Error().Str("collection", collectionName).Msg("collection not found in config")
@@ -252,6 +252,9 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 		newFileHashes    = make(map[string]FileState) // hash → state of newly ingested files
 		movedToState     = make(map[string]FileState) // hash → state of moved-to destination
 		processedCount   int32
+
+		pendingVecMu    sync.Mutex
+		pendingVecChunks []*project.ChunkRecord
 	)
 
 	g, ctx := errgroup.WithContext(context.Background())
@@ -318,10 +321,10 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 				return err
 			}
 
-			if state != FileUnchanged && len(chunks) > 0 && vectorIngestFn != nil {
-				if err := vectorIngestFn(proj, collectionName, chunks); err != nil {
-					util.Logger.Warn().Err(err).Str("file", relPath).Msg("vector ingestion skipped")
-				}
+			if state != FileUnchanged && len(chunks) > 0 && syncEmbed {
+				pendingVecMu.Lock()
+				pendingVecChunks = append(pendingVecChunks, chunks...)
+				pendingVecMu.Unlock()
 			}
 
 			resultMu.Lock()
@@ -348,6 +351,13 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 
 	if err := g.Wait(); err != nil {
 		return SyncResult{}, err
+	}
+
+	if len(pendingVecChunks) > 0 && vectorIngestFn != nil {
+		progress.Send(SyncProgress{FilesProcessed: 0, Phase: "Embedding", TotalFiles: len(pendingVecChunks)})
+		if err := vectorIngestFn(proj, collectionName, pendingVecChunks); err != nil {
+			util.Logger.Warn().Err(err).Msg("vector ingestion failed")
+		}
 	}
 
 	dbFiles, err := db.ListCollectionFiles(collectionName)
@@ -388,7 +398,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 			}
 		}
 
-		if vectorIngestFn != nil && len(deletedChunkIDs) > 0 {
+		if syncEmbed && vectorIngestFn != nil && len(deletedChunkIDs) > 0 {
 			vdb, err := proj.OpenCollectionVector(collectionName, 0)
 			if err != nil {
 				util.Logger.Warn().Err(err).Msg("failed to open vector db for pruning")
