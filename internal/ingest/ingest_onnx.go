@@ -55,5 +55,13 @@ func ingestVectors(proj *project.Project, collection string, chunks []*project.C
 		return fmt.Errorf("save vector index: %w", err)
 	}
 
+	db, err := proj.OpenFTS()
+	if err != nil {
+		return fmt.Errorf("open fts for vector tracking: %w", err)
+	}
+	if err := db.MarkVectorized(ids, collection); err != nil {
+		util.Logger.Warn().Err(err).Int("count", len(ids)).Msg("failed to mark chunks as vectorized")
+	}
+
 	return nil
 }

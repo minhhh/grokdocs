@@ -66,7 +66,11 @@ const (
 		CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
 			INSERT INTO chunks_fts(chunks_fts, rowid, text_content) VALUES('delete', old.id, old.text_content);
 			INSERT INTO chunks_fts(rowid, text_content) VALUES (new.id, new.text_content);
-		END;`
+		END;
+		CREATE TABLE IF NOT EXISTS chunk_vectors (
+			chunk_id INTEGER PRIMARY KEY,
+			collection TEXT NOT NULL
+		);`
 )
 
 // FileRecord represents a row in the files table.
@@ -541,6 +545,113 @@ func (fts *FTSDatabase) GetDocumentByID(docID int64) (*DocumentRecord, error) {
 		record.Metadata = metadata.String
 	}
 	return &record, nil
+}
+
+// VectorChunkOrphan represents a chunk_vectors entry whose chunk no longer exists.
+type VectorChunkOrphan struct {
+	ChunkID    int64
+	Collection string
+}
+
+// MarkVectorized records that the given chunk IDs have been embedded into the
+// per-collection FAISS index. Uses INSERT OR IGNORE so duplicates are safe.
+func (fts *FTSDatabase) MarkVectorized(ids []int64, collection string) error {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
+	tx, err := fts.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO chunk_vectors (chunk_id, collection) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, id := range ids {
+		if _, err := stmt.Exec(id, collection); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetVectorizedChunkIDs returns all chunk IDs that have been marked as
+// vectorized for the given collection.
+func (fts *FTSDatabase) GetVectorizedChunkIDs(collection string) ([]int64, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
+	rows, err := fts.db.Query(`SELECT chunk_id FROM chunk_vectors WHERE collection = ?`, collection)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// DeleteVectorizedChunkIDs removes the given chunk IDs from the tracking table.
+func (fts *FTSDatabase) DeleteVectorizedChunkIDs(ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	_, err := fts.db.Exec(
+		`DELETE FROM chunk_vectors WHERE chunk_id IN (`+strings.Join(placeholders, ",")+`)`,
+		args...,
+	)
+	return err
+}
+
+// ClearCollectionVectors removes all chunk_vectors entries for a collection.
+func (fts *FTSDatabase) ClearCollectionVectors(collection string) error {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
+	_, err := fts.db.Exec(`DELETE FROM chunk_vectors WHERE collection = ?`, collection)
+	return err
+}
+
+// GetOrphanedVectorChunks returns all chunk_vectors entries whose chunk_id
+// no longer exists in the chunks table. Orphans from any collection.
+func (fts *FTSDatabase) GetOrphanedVectorChunks() ([]VectorChunkOrphan, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
+	rows, err := fts.db.Query(`
+		SELECT cv.chunk_id, cv.collection
+		FROM chunk_vectors cv
+		LEFT JOIN chunks c ON cv.chunk_id = c.id
+		WHERE c.id IS NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orphans []VectorChunkOrphan
+	for rows.Next() {
+		var o VectorChunkOrphan
+		if err := rows.Scan(&o.ChunkID, &o.Collection); err != nil {
+			return nil, err
+		}
+		orphans = append(orphans, o)
+	}
+	return orphans, nil
 }
 
 // SearchFTS queries the FTS5 virtual table for matching text and returns matching chunks + FTS BM25 rank score.

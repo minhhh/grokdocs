@@ -47,6 +47,10 @@ func (v *VectorDatabase) AddVectors(ids []int64, vectors []float32) error {
 	return nil
 }
 
+func (v *VectorDatabase) Reset() error {
+	return v.index.Reset()
+}
+
 func (v *VectorDatabase) RemoveIDs(ids []int64) error {
 	if len(ids) == 0 {
 		return nil
