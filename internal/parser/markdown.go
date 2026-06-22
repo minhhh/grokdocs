@@ -114,11 +114,12 @@ func (p *MarkdownParser) Parse(relPath string, content string) (*ParsedDocument,
 	}
 
 	sectionNum := 0
+	inCodeBlock := buildFenceMap(lines)
 
 	for lineIdx, rawLine := range lines {
 		lineChars := utf8.RuneCountInString(rawLine)
 
-		if heading, ok := parseMdHeading(rawLine); ok {
+		if heading, ok := parseMdHeading(rawLine); ok && !inCodeBlock[lineIdx] {
 			if cur.charCount >= DefaultChunkMinSizeChar {
 				flush(len(cur.lines) - 1, 0)
 			}
@@ -136,7 +137,7 @@ func (p *MarkdownParser) Parse(relPath string, content string) (*ParsedDocument,
 		cur.charCount += lineChars + 1
 
 		for cur.charCount > DefaultChunkMaxSizeChar {
-			splitLine, reverseEndPos := findSplit(cur, lines, DefaultChunkMaxSizeChar, DefaultChunkMinSizeChar)
+			splitLine, reverseEndPos := findSplit(cur, lines, inCodeBlock, DefaultChunkMaxSizeChar, DefaultChunkMinSizeChar)
 			flush(splitLine, reverseEndPos)
 		}
 	}
@@ -150,15 +151,28 @@ func (p *MarkdownParser) Parse(relPath string, content string) (*ParsedDocument,
 	}, nil
 }
 
+func buildFenceMap(lines []string) []bool {
+	inCode := false
+	result := make([]bool, len(lines))
+	for i, line := range lines {
+		result[i] = inCode
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inCode = !inCode
+		}
+	}
+	return result
+}
+
 // Return the place to split the chunk buffer in 2 halves to satisfy the max size condition
-func findSplit(cur chunkBuffer, lines []string, maxChars int, minChars int) (splitLine int, reverseEndPos int) {
+func findSplit(cur chunkBuffer, lines []string, inCodeBlock []bool, maxChars int, minChars int) (splitLine int, reverseEndPos int) {
 	totalChars := cur.charCount
-	// First find a blankline to split
+	// First find a blankline to split (but not inside a fenced code block)
 	for i := len(cur.lines) - 1; i >= 0; i-- {
 		line := lines[cur.lines[i]]
 		lineLen := utf8.RuneCountInString(line)
 		totalChars -= lineLen + 1
-		if totalChars <= maxChars && totalChars >= minChars && strings.TrimSpace(line) == "" {
+		if totalChars <= maxChars && totalChars >= minChars && strings.TrimSpace(line) == "" && !inCodeBlock[cur.lines[i]] {
 			return i - 1, 0
 		}
 	}

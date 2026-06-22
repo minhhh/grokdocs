@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	DefaultChunkMaxSizeChar = 1500
-	DefaultChunkMinSizeChar = 800
+	DefaultChunkMaxSizeChar = 3000
+	DefaultChunkMinSizeChar = 200
 	DefaultChunkOverlap   float64  = 10
 )
 

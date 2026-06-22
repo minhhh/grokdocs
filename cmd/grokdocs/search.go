@@ -97,6 +97,7 @@ var searchCmd = &cobra.Command{
 				}
 			} else {
 				util.Logger.Warn().Msg("semantic search unavailable (compile with -tags onnx); using FTS only")
+				results = ftsResults
 				break
 			}
 			results = mergeHybridResults(ftsResults, semanticResults, limit)
