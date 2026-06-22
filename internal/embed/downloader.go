@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	ModelName = "paraphrase-multilingual-MiniLM-L12-v2"
+	ModelName = "all-MiniLM-L6-v2"
 
 	ModelFileName = "model.onnx"
 	VocabFileName = "tokenizer.json"

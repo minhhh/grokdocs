@@ -1,6 +1,6 @@
 # grokdocs — Deconstructed Code Reference
 
-**Note on DefaultChunkMaxSizeChar:** The constant is `1500` in `parser.go:12`. Tests and older comments may reference `1300` — those refer to a previous value before the default was raised. All production codepaths use the current `1500`.
+**Note on DefaultChunkMaxSizeChar:** The constant is `1500` in `parser.go:12` — sized so chunks fit in 512 tokens without truncation.
 
 ## Entry Points
 
