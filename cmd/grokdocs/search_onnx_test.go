@@ -45,7 +45,9 @@ func TestSearchSemanticLimitExceedsAvailable(t *testing.T) {
 	}
 	defer db.Close()
 
-	initEmbedder()
+	if err := initEmbedder(); err != nil {
+		t.Fatalf("initEmbedder: %v", err)
+	}
 	defer closeEmbedder()
 
 	// Sync — produces vectors for the single chunk

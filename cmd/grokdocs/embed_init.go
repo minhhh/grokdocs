@@ -2,5 +2,5 @@
 
 package main
 
-func initEmbedder() {}
+func initEmbedder() error { return nil }
 func closeEmbedder() {}

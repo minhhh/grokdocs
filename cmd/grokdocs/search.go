@@ -67,7 +67,10 @@ var searchCmd = &cobra.Command{
 			project.AssertCollectionValid(proj, searchCollection)
 		}
 
-		initEmbedder()
+		if err := initEmbedder(); err != nil {
+			util.Logger.Error().Err(err).Msg("failed to initialize embedder")
+			return
+		}
 		defer closeEmbedder()
 
 		flatDisplay := false

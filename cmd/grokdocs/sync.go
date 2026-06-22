@@ -66,7 +66,10 @@ var syncCmd = &cobra.Command{
 		}
 
 		if syncEmbed {
-			initEmbedder()
+			if err := initEmbedder(); err != nil {
+				util.Logger.Error().Err(err).Msg("failed to initialize embedder")
+				os.Exit(1)
+			}
 			defer closeEmbedder()
 		}
 

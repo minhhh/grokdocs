@@ -4,8 +4,9 @@ package main
 
 import "github.com/minhhh/grokdocs/internal/embed"
 
-func initEmbedder() {
-	embed.GetGlobalEmbedder()
+func initEmbedder() error {
+	_, err := embed.GetGlobalEmbedder()
+	return err
 }
 
 func closeEmbedder() {

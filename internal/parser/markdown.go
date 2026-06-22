@@ -7,7 +7,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/minhhh/grokdocs/internal/project"
-	//"github.com/minhhh/grokdocs/internal/util"
 )
 
 // MarkdownParser splits markdown content line-by-line and section-by-section,
@@ -48,13 +47,17 @@ type chunkBuffer struct {
 	charCount    int
 }
 
+func (b chunkBuffer) realCharCount() int {
+	return b.charCount - 1
+}
+
 func (p *MarkdownParser) Parse(relPath string, content string) (*ParsedDocument, error) {
 	lines := strings.Split(content, "\n")
 
 	var chunks []*project.ChunkRecord
 	chunkIndex := 0
 
-	// reverseEndPos means we split from the end of a line
+	// reverseEndPos means we split from the end of a line, after position length - 1 - reverseEndPos
 	// if reverseEndPos=0, it means we take the whole line
 	// otherwise we take part of the line, but never skip the whole line
 	// If we want to skip the whole line, then the split should be on the previous line
@@ -110,7 +113,7 @@ func (p *MarkdownParser) Parse(relPath string, content string) (*ParsedDocument,
 			cur.startPos = utf8.RuneCountInString(lines[cur.lines[0]]) - reverseEndPos
 		}
 
-		cur.charCount = cur.charCount - chunks[len(chunks) - 1].TotalChars
+		cur.charCount = countBufferChars(cur, lines) + 1
 	}
 
 	sectionNum := 0
@@ -136,7 +139,7 @@ func (p *MarkdownParser) Parse(relPath string, content string) (*ParsedDocument,
 		cur.lines = append(cur.lines, lineIdx)
 		cur.charCount += lineChars + 1
 
-		for cur.charCount > DefaultChunkMaxSizeChar {
+		for cur.realCharCount() > DefaultChunkMaxSizeChar {
 			splitLine, reverseEndPos := findSplit(cur, lines, inCodeBlock, DefaultChunkMaxSizeChar, DefaultChunkMinSizeChar)
 			flush(splitLine, reverseEndPos)
 		}
@@ -162,6 +165,19 @@ func buildFenceMap(lines []string) []bool {
 		}
 	}
 	return result
+}
+
+
+func countBufferChars(buf chunkBuffer, lines []string) int {
+	count := 0
+	for i, li := range buf.lines {
+		lineChars := utf8.RuneCountInString(lines[li])
+		if i == 0 {
+			lineChars -= buf.startPos
+		}
+		count += lineChars + 1
+	}
+	return count - 1
 }
 
 // Return the place to split the chunk buffer in 2 halves to satisfy the max size condition

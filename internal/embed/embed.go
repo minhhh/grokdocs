@@ -38,9 +38,12 @@ func GetGlobalEmbedder() (*Embedder, error) {
 		return nil, fmt.Errorf("get models: %w", err)
 	}
 
-	ort.SetSharedLibraryPath("/usr/local/lib/libonnxruntime.dylib")
-	if err := ort.InitializeEnvironment(); err != nil {
-		return nil, fmt.Errorf("init onnx runtime: %w", err)
+	didInit := !ort.IsInitialized()
+	if didInit {
+		ort.SetSharedLibraryPath("/usr/local/lib/libonnxruntime.dylib")
+		if err := ort.InitializeEnvironment(); err != nil {
+			return nil, fmt.Errorf("init onnx runtime: %w", err)
+		}
 	}
 
 	inputInfo, outputInfo, err := ort.GetInputOutputInfo(mf.ModelPath)
@@ -48,6 +51,9 @@ func GetGlobalEmbedder() (*Embedder, error) {
 		return nil, fmt.Errorf("get model IO info: %w", err)
 	}
 	if len(inputInfo) == 0 || len(outputInfo) == 0 {
+		if didInit {
+			ort.DestroyEnvironment()
+		}
 		return nil, fmt.Errorf("model has no inputs or outputs")
 	}
 
@@ -64,11 +70,17 @@ func GetGlobalEmbedder() (*Embedder, error) {
 
 	tokenizer, err := NewTokenizer(mf.VocabPath)
 	if err != nil {
+		if didInit {
+			ort.DestroyEnvironment()
+		}
 		return nil, fmt.Errorf("new tokenizer: %w", err)
 	}
 
 	session, err := ort.NewDynamicAdvancedSession(mf.ModelPath, inputNames, outputNames, nil)
 	if err != nil {
+		if didInit {
+			ort.DestroyEnvironment()
+		}
 		return nil, fmt.Errorf("new session: %w", err)
 	}
 

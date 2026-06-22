@@ -62,7 +62,10 @@ var embedCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		initEmbedder()
+		if err := initEmbedder(); err != nil {
+			util.Logger.Error().Err(err).Msg("failed to initialize embedder")
+			os.Exit(1)
+		}
 		defer closeEmbedder()
 
 		var targets []string
