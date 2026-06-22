@@ -1,407 +1,316 @@
 # grokdocs — Deconstructed Code Reference
 
-**Note on DefaultChunkMaxSizeChar:** The constant is `1500` in `parser.go:12` — sized so chunks fit in 512 tokens without truncation.
+---
 
-## Entry Points
+## 1. High-Level Architecture & Domain Map
+
+```
+                  ┌────────────────────────┐
+                  │    CLI Entry Points    │ (cmd/grokdocs/)
+                  │ init | sync | search  │
+                  └───────────┬────────────┘
+                              │
+                              ▼
+                  ┌────────────────────────┐
+                  │   Ingestion Pipeline   │ (internal/ingest/)
+                  │    SyncCollection()    │
+                  └───────────┬────────────┘
+                              │
+             ┌────────────────┴────────────────┐
+             ▼                                 ▼
+┌────────────────────────┐         ┌────────────────────────┐
+│     Parsing Engine     │         │     Storage Engine     │ (internal/project/)
+│   (internal/parser/)   │         │ SQLite (FTS) & FAISS   │
+│ Markdown | Chunkx AST  │         │  (chunk_vectors, etc.) │
+└────────────┬───────────┘         └───────────▲────────────┘
+             │                                 │
+             └───────────────┬─────────────────┘
+                             │ (if --embed)
+                             ▼
+                 ┌────────────────────────┐
+                 │   Embedding Pipeline   │ (internal/embed/)
+                 │ ONNX Runtime / Model   │
+                 └────────────────────────┘
+```
+
+### Domain Directory Mapping
+
+* **CLI Commands (`cmd/grokdocs/`)**: Entry points bootstrapping the project (`root.go`, `init.go`), triggering synchronization (`sync.go`), running database metrics (`status.go`), or serving queries (`search.go`).
+
+* **Ingestion (`internal/ingest/`)**: The control loop (`ingest.go`) that discovers files using glob rules (`walk.go`, `glob.go`), determines changed files via checksums, and coordinates chunking and storage.
+
+* **Parsing (`internal/parser/`)**: The parser registry (`parser.go`) and implementations (`markdown.go` and `chunkx.go`) that partition files into size-constrained chunks.
+
+* **Storage (`internal/project/`)**: Data lifecycle manager (`project.go`) maintaining the SQLite FTS5 database (`fts.go`) and the FAISS flat indexes (`vector.go`).
+
+* **Embeddings (`internal/embed/`)**: Low-level inference code downloading and executing ONNX models (`embed.go`, `downloader.go`, `tokenizer.go`).
+
+---
+
+## 2. System Parameters & Configuration Precedence
+
+### Core Magic Variables
+
+* `DefaultChunkMaxSizeChar` = `1500` (defined in `internal/parser/parser.go:12`) — hard upper bound on chunk rune length (sized to fit within 512 tokens without truncation).
+
+* `DefaultChunkMinSizeChar` = `200` (defined in `internal/parser/parser.go:13`) — soft lower bound for Markdown heading flushes.
+
+* `DefaultChunkOverlap` = `10` (defined in `internal/parser/parser.go:14`).
+
+### CLI Parameter Precedence
+
+CLI flags (e.g. `--collection`, `--concurrency`, `--prune`) override collection-specific config values defined in `.grokdocs/config.yaml`.
+
+* The configuration defaults to a single collection named `"default"`, targeting the `docs/` folder, including `*.md`, `*.go`, and `*.py`.
+
+* If a collection name is specified via CLI (e.g. `-c default`), the system verifies the collection exists via `project.AssertCollectionValid()`.
+
+---
+
+## 3. Traceability Mapping Matrix
+
+| CLI Command | Package Entry Point | Primary DB Operations | Core Target Struct / Files |
+|---|---|---|---|
+| `grokdocs init` | `proj.Init` | Writes default `config.yaml` | `cmd/grokdocs/init.go`, `project.go` |
+| `grokdocs stats` | `db.GetStats` | Queries counts of files, docs, chunks, collections | `cmd/grokdocs/status.go`, `fts.go` |
+| `grokdocs sync` | `ingest.SyncCollection` | `SaveFile`, `SaveDocument`, `SaveChunksBatch` | `cmd/grokdocs/sync.go`, `ingest.go` |
+| `grokdocs embed` | `embedCollectionFn` | `GetVectorizedChunkIDs`, `ClearCollectionVectors` | `cmd/grokdocs/embed.go`, `embed.go` |
+| `grokdocs search` | `searchCmd` / `searchSemantic` | `SearchFTS`, `GetChunkByID` | `cmd/grokdocs/search.go`, `search_onnx.go` |
+
+---
+
+## 4. Data Models & Interface Specifications
+
+### SQLite/FTS5 Schema (`internal/project/fts.go`)
+
+* Four tables, one FTS5 virtual table, and three triggers:
+    * `files`: `id` (PK, INTEGER AUTOINCREMENT), `file_path` (UNIQUE, TEXT), `filename` (TEXT), `size` (INTEGER), `modified_at` (INTEGER), `content_hash` (TEXT).
+    * `documents`: `id` (PK, INTEGER AUTOINCREMENT), `file_id` (FK to `files.id` ON DELETE CASCADE), `collection` (TEXT), `slug` (TEXT), `chunk_count` (INTEGER), `total_chars` (INTEGER), `metadata` (TEXT).
+    * `chunks`: `id` (PK, INTEGER AUTOINCREMENT), `document_id` (FK to `documents.id` ON DELETE CASCADE), `chunk_index` (INTEGER), `text_content` (TEXT), `total_chars` (INTEGER), `line_start` (INTEGER), `line_end` (INTEGER), `section_num` (INTEGER), `section_title` (TEXT), `slug` (TEXT), `metadata` (TEXT).
+    * `chunks_fts`: FTS5 virtual table built on `chunks` (`text_content`), with content sync triggers linking `chunks.id` to `chunks_fts.rowid`.
+    * `chunk_vectors`: `chunk_id` (PK, INTEGER), `collection` (TEXT) — tracks which database chunks have corresponding vector entries.
+
+### FAISS Vector Interface (`internal/project/vector.go`)
+
+* `VectorDatabase` wraps the FAISS index file (`grokdocs-{collection}.index`).
+
+* Vectors are stored using 32-bit floats (`[]float32`), with embedding dimension matching the model size.
+
+* **Relational mapping**: The integer IDs added via `AddVectors(ids, vectors)` map **1-to-1** with the `id` field of the `chunks` SQLite table. Consequently, the labels returned by `Search(query, k)` are the SQLite `chunks.id` values.
+
+---
+
+## 5. Entry Points & Bootstrapping
 
 ### CLI Bootstrap — `cmd/grokdocs/root.go`
-- `rootCmd` (cobra.Command, line 22) — top-level command, `PersistentPreRun` initializes the logger (line 27-35)
-- `Execute()` (line 42) — calls `rootCmd.Execute()`, exits on error
-- `init()` (line 49) — registers `--project`, `--verbose`, `--log-format` flags
+
+* `rootCmd` (cobra.Command, line 22) — top-level command. `PersistentPreRun` initializes the logger.
+
+* `Execute()` (line 42) — calls `rootCmd.Execute()`, exits on error.
+
+* `init()` (line 49) — registers `--project`, `--verbose`, `--log-format` flags.
 
 ### Search Command — `cmd/grokdocs/search.go`
 
-- `searchCmd` (line 28) — `grokdocs search [query]`
-  - Resolves `Project` via `project.FindProject(startDir)` -> `proj.Init()` (line 39-45)
-  - Opens FTS database: `proj.OpenFTS()` (line 54)
-  - Three modes (line 73-100):
-    - `"fts"`: `db.SearchFTS(query, collection, limit)` (line 75)
-    - `"semantic"`: `semanticSearchFn(proj, db, query, collection, limit)` (line 81) — injected by ONNX build
-    - `"hybrid"`: runs both FTS and semantic, then `mergeHybridResults()` (line 99)
-  - `displayResults()` (line 116) — groups results by file path, prints line ranges + snippets
-  - `readLinesOfFile()` (line 204) — reads source lines from disk for display
-   - `mergeHybridResults()` (line 166) — RRF (Reciprocal Rank Fusion): sums `1 / (rrfK + rank)` across FTS and semantic lists, sorts by combined score
+* `searchCmd` (line 28) — `grokdocs search [query]`
+    * Resolves `Project` via `project.FindProject(startDir)`.
+    * Opens FTS database: `proj.OpenFTS()`.
+    * In hybrid mode: runs both FTS and semantic search, then merges results via `mergeHybridResults()` (line 106).
+
+* `readLinesOfFile()` (line 208) — reads source lines from disk for display.
 
 ### ONNX Semantic Search — `cmd/grokdocs/search_onnx.go` (build tag: `onnx`)
 
-- `init()` (line 14) — sets `semanticSearchFn = searchSemantic`
-- `searchSemantic()` (line 18):
-  - `embed.Embed(query)` -> vector (line 19)
-  - `proj.OpenCollectionVector(collection, embed.Dim())` -> FAISS index (line 24)
-  - `vdb.Search(vec, limit)` -> labels + distances (line 29)
-  - `ftsDB.GetChunkByID(label)` -> enrich results with line/section metadata (line 40)
-  - Rank: `1.0 / (1.0 + distance)` (line 55)
-- `makeSnippet()` (line 62) — truncates text to `maxLen` runes
-
-### Server Command — `cmd/grokdocs/server.go`
-- *(Not yet read — HTTP server for remote search)*
+* `searchSemantic()` (line 18):
+    * `embed.Embed(query)` -> vector (line 19).
+    * `proj.OpenCollectionVector(collection, embed.Dim())` -> FAISS index (line 24).
+    * `vdb.Search(vec, limit)` -> labels (SQLite chunk IDs) + distances (line 29).
+    * `ftsDB.GetChunkByID(label)` -> joins chunk details with document/file meta for display (line 40).
+    * Rank: `1.0 / (1.0 + distance)` (line 55).
 
 ---
 
-## Core Structs & Interfaces
+## 6. Critical Flow Walkthroughs
 
-### `internal/project/project.go` — Project Workspace
-- `Project` struct (line 21):
-  - `RootPath`, `ConfigDir`, `Config`, `ftsDB`, `vectorDB`, `collVectorDBs`
-- `NewProject(rootPath)` (line 31) — creates instance with absolute root path
-- `FindProject(startDir)` (line 45) — walks up directories looking for `.grokdocs/` folder; falls back to `startDir`
-- `Project.Init()` (line 70) — creates `.grokdocs/` dir, writes default `config.yaml` if missing, calls `p.load()`
-- `Project.load()` (line 101) — parses `config.yaml` via `config.LoadFromFile()`
-- `Project.OpenFTS()` (line 113) — opens `grokdocs.db`, runs `InitSchema()` (creates tables, FTS5, triggers)
-- `Project.OpenVector(dim)` (line 131) — opens `grokdocs.index` FAISS file
-- `Project.OpenCollectionVector(collection, dim)` (line 150) — per-collection FAISS index (`grokdocs-{collection}.index`)
-- `Project.Close()` (line 170) — closes FTS + all vector DBs
+### Flow: Ingestion and Storage (`ingest.SyncCollection`)
 
-### `internal/project/fts.go` — SQLite/FTS5 Storage
-- `FTSDatabase` struct (line 13): `Path string`, `db *sql.DB`, `mu sync.Mutex`
-- **Schema** (lines 22-69): 3 tables + 1 FTS5 virtual table + 3 triggers:
-  - `files`: id, file_path, filename, size, modified_at, content_hash
-  - `documents`: id, file_id, collection, slug, chunk_count, total_chars, metadata
-  - `chunks`: id, document_id, chunk_index, text_content, total_chars, line_start, line_end, section_num, section_title, slug, metadata
-  - `chunks_fts`: FTS5 virtual table with content sync from chunks table
-- `FileRecord` (line 73), `DocumentRecord` (line 83), `ChunkRecord` (line 94), `SearchResult` (line 109)
-- `OpenFTSDatabase(dbPath)` (line 122) — opens SQLite, pings
-- `InitSchema()` (line 158) — enables foreign keys, executes DDL
-- **CRUD**: `GetFile` (line 173), `SaveFile` (line 187), `GetDocument` (line 308), `SaveDocument` (line 337), `GetChunkByID` (line 507), `SaveChunksBatch` (line 465), `DeleteChunksForDocument` (line 499), `DeleteFile` (line 262), `DeleteFilesBatch` (line 273)
-- **Collection**: `ListCollectionFiles` (line 224), `DeleteOrphanedDocuments` (line 251)
-- **Search**: `SearchFTS(queryText, collection, limit)` (line 547) — joins chunks + documents + chunks_fts, uses BM25 rank, `snippet()` for context
-- **Stats**: `GetStats()` (line 605) — counts files, documents, chunks, chars, docs/chunks per collection
+```
+1. Resolve collection configuration, construct file filter, and discover paths via walkFiles().
+2. Compare mtime and checksum of files in parallel:
+     -> If unchanged (match db.GetFile): skip file.
+     -> If changed/new:
+          -> Call project.GetDocument() and delete old chunks.
+          -> Resolve parser name via parser.ResolveParserName() and call parser.GetParser().
+          -> Execute docParser.Parse(relPath, content).
+          -> Commit new chunks to SQLite using db.SaveChunksBatch(chunks).
+3. If --embed is enabled:
+     -> Fetch SQLite chunk IDs and text content of new/modified chunks.
+     -> Generate embeddings via ONNX model and add vectors with chunk.id as FAISS label.
+     -> Record vectorized status in SQLite `chunk_vectors` table.
+4. If --prune is enabled:
+     -> Delete orphaned file records, document records, and their FAISS vector entries.
+```
 
-### `internal/project/vector.go` — FAISS Vector Database
-- `VectorDatabase` struct: wraps FAISS index with file path, mutex
-- `OpenVectorDatabase(path, dim)` -> creates/loads index
-- `AddVectors(ids, vectors)` -> `vdb.AddVectorsWithIDs()`
-- `Search(query, k)` -> labels, distances
-- `RemoveIDs(ids)`, `Save()`, `Close()`, `Dim()`, `Len()`
+### Flow: Concurrency & Progress Throttling (`internal/util/guardedchan.go`)
 
-### `internal/parser/parser.go` — Parser Registry & Dispatch
-- `DefaultChunkMaxSizeChar = 1300` (line 11), `DefaultChunkOverlap = 10` (line 12)
-- `ParsedDocument` struct (line 15): `Slug`, `Metadata` (JSON), `Chunks []*ChunkRecord`
-- `Parser` interface (line 22): `Parse(relPath string, content string) (*ParsedDocument, error)`
-- `parserRegistry map[string]Parser` (line 27)
-- `RegisterParser(name, p)` (line 29), `GetParser(name)` (line 33)
-- `MatchPriority` (line 41-49): `PriorityNone < PriorityWildcard < PriorityExtension < PriorityComplexExtension < PriorityExactFile`
-- `defaultParserMapping` (line 85-142): maps ~50 extensions to `"chunkx"` or `"markdown"`
-- `ResolveParserName(cfg, collectionName, path)` (line 144):
-  1. Check collection-level `Parsers` map (highest priority by pattern type)
-  2. Fall back to `defaultParserMapping[filepath.Ext(path)]`
-  3. Fall back to `defaultParserMapping[filepath.Base(path)]`
-  4. Returns `("", false)` if no match
+During execution of `SyncCollection` or `embedCollectionFn`, progress notifications are channeled back to the terminal CLI main thread via `util.GuardedChan`:
+- `GuardedChan` wraps standard Go channels with a mutex (`sync.Mutex`) to prevent writing to or closing closed channels.
+- **Non-blocking / Dropping policy**: In `Send(v T)` (line 15), if the channel buffer is full, the select block falls back to the `default` case and drops the progress update instead of blocking the file-processing workers.
 
-### `internal/parser/chunkx.go` — ChunkxParser
-- `CharTokenizer` (line 15): `CountTokens(text)` -> `utf8.RuneCountInString(text)`
-- `var charTok = &CharTokenizer{}` (line 21) — package-level singleton
-- `sectionHeader` (line 23): `Title`, `LineNumber`
-- `parseMarkdownHeaders(content)` (line 28) — scans lines starting with `#` followed by space
-- `ChunkxParser` struct (line 60): `DefaultLanguage languages.LanguageName`
-- `ChunkxParser.Parse(relPath, content)` (line 64):
-  1. Detect language from file extension (chunkx auto-detection)
-  2. `chunkx.NewChunker().Chunk(content, ...)` with `CharTokenizer`, max 1300 chars, overlap 10
-  3. Extract markdown headers (`.md`/`.markdown` only)
-  4. For each chunkx chunk: determine section from headers, call `splitChunk()`
-  5. Assign sequential `ChunkIndex`, append all sub-chunks
-- `splitChunk(cx, sectionTitle, sectionNum, meta)` (line 138):
-  - If `numChars <= 1300`: return single record with `cx.StartLine`/`cx.EndLine`
-  - Else: split into `ceil(numChars / 1300)` parts by rune count
-  - Compute `LineStart`/`LineEnd` for each sub-chunk by counting newlines, capped at `cx.EndLine`
-  - Known chunkx off-by-one: when chunkx merges overlapping portions, line numbers can be +1 off
-- `init()` (line 186): registers `"chunkx"` parser, `"markdown"` parser with `DefaultLanguage: languages.Markdown`
+### Flow: Markdown Parser Chunker (`internal/parser/markdown.go`)
 
-### `internal/config/config.go` — Configuration
-- `Config` struct: `Collections map[string]CollectionConfig`
-- `CollectionConfig`: `Path` (string), `Files`, `Include`, `Exclude` (string slices), `Parsers` (map[string]string)
-- `LoadConfig(path)` / `LoadFromFile(path)` — YAML parsing
-- `DefaultConfig()` — returns config with a single `"default"` collection pointing at `docs/` with `*.md`, `*.go`, `*.py`
-- `SaveToFile(path)` / `SaveConfig(cfg, path)`
+Line-by-line chunker protecting code block fences and splitting on headings:
+```
+1. Scan content and build inCodeBlock fence map.
+2. Iterate lines:
+     - Heading line: If accumulated charCount >= parser.DefaultChunkMinSizeChar: flush buffer as completed chunk.
+     - Content line: Append line to current buffer.
+     - If realCharCount() > parser.DefaultChunkMaxSizeChar:
+           -> Invoke findSplit() to find optimal split point.
+           -> Flush split portion, leaving remaining tail in buffer.
+3. Flush remaining lines.
+```
 
-### `internal/embed/embed.go` (build tag: `onnx`) — Embedding
-- `Embedder` struct (line 13): `session`, `tokenizer`, `dim`
-- `GetGlobalEmbedder()` (line 24): singleton — downloads model, loads ONNX session, creates tokenizer
-- `Embed(text)` (line 83): tokenizes -> ONNX inference -> mean pooling -> L2 normalize -> returns `[]float32`
-- `Dim()` (line 134): returns embedding dimension
-- `Close()` (line 144): destroys session + ONNX runtime
-- `meanPool()` (line 155): attention-masked mean pooling over sequence dimension
-- `l2Normalize()` (line 183): in-place L2 normalization
+**`findSplit` — 4-tier split strategy** (`markdown.go:184`):
+Walks the buffer backward to find a split point where the tail part's character count falls within `[parser.DefaultChunkMinSizeChar, parser.DefaultChunkMaxSizeChar]`:
 
-### `internal/embed/tokenizer.go` (build tag: `onnx`)
-- `Tokenizer` interface, `UnigramTokenizer` — SentencePiece Unigram model
-- `Encode(text, maxSeqLen)` -> `inputIDs`, `attentionMask`, `tokenTypeIDs`
-- NFKC normalization, SentencePiece pre-tokenization, Viterbi decoding
+| Tier | Split Criteria | Precedence |
+|------|----------------|------------|
+| **1. Blank line** | A blank line (`strings.TrimSpace(line) == ""`) where removing it and everything after brings `totalChars` into `[parser.DefaultChunkMinSizeChar, parser.DefaultChunkMaxSizeChar]` | Highest — cleanest split |
+| **2. Sentence separator** | A `.`, `!`, or `?` rune within a line where splitting there brings the tail into `[parser.DefaultChunkMinSizeChar, parser.DefaultChunkMaxSizeChar]` | |
+| **3. Word separator** | A space separator (unicode.IsSpace) where splitting there brings the tail into `[parser.DefaultChunkMinSizeChar, parser.DefaultChunkMaxSizeChar]` | |
+| **4. Anywhere** | Any rune position (fallback) | Lowest — last resort |
 
-### `internal/embed/downloader.go` (build tag: `onnx`)
-- `GetOrDownloadModels(cacheDir)` -> `ModelFiles{ModelPath, VocabPath}`
-- Downloads model + vocab from HuggingFace, caches in `~/.cache/grokdocs/`
+### Flow: AST Code Chunker (`internal/parser/chunkx.go`)
 
-### `internal/ingest/ingest.go` — Ingestion Pipeline
-- `vectorIngestFn` (line 26): injected by ONNX build; embeds chunks and pushes to FAISS
-- **Globals**: `defaultIncludeList` (line 40), `defaultExcludeList` (line 62)
-- `makeSlug(collectionName, relPath)` (line 28): `"default--docs--intro-md"`
-- `SyncCollection(proj, collectionName, progress, prune, concurrency)` (line 218):
-  1. Look up collection config, build `fileFilter`
-  2. Walk files (two-pass: count total, then process with concurrency semaphore)
-  3. For each file: resolve parser -> `ingestFile()` -> optionally `vectorIngestFn()`
-  4. If `prune`: diff seen files vs DB, handle deletions/moves, remove orphaned documents
-  5. Deduct moved-to files from Added/Modified counts
-  6. Return `SyncResult{Unchanged, Added, Modified, Moved, Deleted}`
-- `ingestFile(db, relPath, absPath, collectionName, parserName, cfg)` (line 428):
-  1. Stat file, compute SHA256
-  2. Check DB for existing file record (mtime/hash-based change detection)
-  3. Create/update `FileRecord` + `DocumentRecord`
-  4. Get parser -> `docParser.Parse(relPath, content)`
-  5. Save chunks via `SaveChunksBatch()`
+AST-respecting code chunking using `gomantics/chunkx`.
+```
+1. Call chunkx.NewChunker().Chunk(content) -> returns []chunkx.Chunk.
+2. For each chunkx.Chunk:
+     - If chunk size <= parser.DefaultChunkMaxSizeChar runes: wrap into single ChunkRecord.
+     - If chunk size > parser.DefaultChunkMaxSizeChar runes: split into ceil(numChars/parser.DefaultChunkMaxSizeChar) sub-chunks by rune count.
+     - Recalculate line offsets (LineStart/LineEnd) dynamically by counting newlines.
+```
 
-### `internal/ingest/walk.go` — File Walker
-- `walkFiles(ctx, collectionRoot, filter)` (line 133):
-  - If `include` set: recursive `filepath.Walk()`, skip excluded dirs, filter via `filter.Match()`
-  - If `files` set: stat each explicitly listed path
-  - Uses `onlyIncludedFolders` for directory-pruning optimization
+### Flow: Hybrid Ranking RRF blending (`cmd/grokdocs/search.go`)
 
-### `internal/ingest/glob.go` — Glob Matching
-- `matchGlob(path, pattern)` — supports `**` (double-star) via recursive matching
-- `matchGlobParts(parts, patternParts)` — recursive double-star expansion
-
-### `internal/config/config.go`
-- `CollectionConfig`: `Path`, `Files`, `Include`, `Exclude`, `Parsers`
-- Parser resolution uses priority-based matching (exact file > extension > wildcard)
-
-### `internal/util/logger.go`
-- `InitLogger(writer, verbose, format)` — sets up zerolog
-- `verboseWriter` / `minimalWriter` — controls log level filtering
+Blends BM25 FTS ranking and FAISS semantic distances using Reciprocal Rank Fusion:
+```
+1. FTS search -> returns ordered list of ChunkRecords.
+2. Semantic search -> returns ordered list of ChunkRecords.
+3. Compute score for each chunk:
+     score = sum of [ 1 / (rrfK + rank + 1) ] across both lists (rrfK default = 60)
+4. Deduplicate results using seen map, sum scores, sort descending, and truncate to limit.
+```
 
 ---
 
-## Critical Flows
+## 7. Package Boundaries & Interaction Interfaces
 
-### Flow: File Ingestion -> Chunking -> Storage
-```
-ingest.SyncCollection()
-    -> walkFiles(ctx, absPath, fileFilter)
-        -> for each file:
-            -> parser.ResolveParserName(cfg, collection, relPath)
-                -> collection-level Parsers map (priority: exact > extension > wildcard)
-                -> defaultParserMapping[ext] or defaultParserMapping[basename]
-            -> parser.GetParser(parserName)
-            -> ingestFile(db, relPath, absPath, collection, parserName, cfg)
-                -> os.Stat(), computeSHA256()
-                -> db.GetFile(relPath) -> check mtime/hash -> skip if unchanged
-                -> db.GetDocument(fileID, collection) -> delete old chunks
-                -> docParser.Parse(relPath, content)
-                    -> if parser == "markdown":
-                        -> MarkdownParser.Parse()
-                            -> line-by-line accumulation
-                            -> findSplit() (4-tier: blank > sentence > word > anywhere)
-                            -> flush() -> []ChunkRecord
-                    -> if parser == "chunkx":
-                        -> ChunkxParser.Parse()
-                            -> chunkx.NewChunker().Chunk() -> []chunkx.Chunk
-                            -> parseMarkdownHeaders() -> []sectionHeader
-                            -> splitChunk(cx, section, meta) -> []ChunkRecord
-                -> db.SaveChunksBatch(chunks) -> single transaction
-    -> if prune: diff DB files vs seen, delete orphans
-```
+The codebase is organized into distinct Go packages designed to decouple concerns. These packages manage cross-directory interactions using formal hand-off structures and interfaces:
 
-### Flow: Chunking algorithm — `ChunkxParser`
-
-The `Parser` interface (`internal/parser/parser.go:22`) is the extension point for chunking. It consumes raw file content and produces a `ParsedDocument` containing a flat slice of `ChunkRecord` values:
+### Inter-Package Boundaries & Handoff Specifications
 
 ```
-Parser.Parse(relPath, content string) -> *ParsedDocument{Chunks []*ChunkRecord}
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                cmd/grokdocs                                 │
+└──────┬───────────────────────────────┬───────────────────────────────┬──────┘
+       │ (Init)                        │ (SyncProgress)                │ (Project, FTS, Vector)
+       ▼                               ▼                               ▼
+┌──────────────┐                ┌──────────────┐                ┌──────────────┐
+│  internal/   │                │  internal/   │                │  internal/   │
+│    config    │                │     util     │                │   project    │
+└──────┬───────┘                └──────────────┘                └──────┬───────┘
+       │ (CollectionConfig)                                            │
+       ▼                                                               │
+┌──────────────┐ (Parser / ParsedDocument)                             │
+│  internal/   │◄──────────────────────────────────────────────────────┤
+│    parser    │                                                       │
+└──────┬───────┘                                                       │ (FTSDatabase / VectorDatabase)
+       │ (Text Content)                                                │
+       ▼                                                               │
+┌──────────────┐                                                       │
+│  internal/   │◄──────────────────────────────────────────────────────┤
+│    embed     │                                                       │
+└──────┬───────┘                                                       │
+       │ (Embeddings Vector)                                           │
+       ▼                                                               │
+┌──────────────┐                                                       │
+│  internal/   │◄──────────────────────────────────────────────────────┘
+│    ingest    │ (Saves Chunks & Vectors)
+└──────────────┘
 ```
 
-There are two implementations: `ChunkxParser` (registered as `"chunkx"` and `"markdown"`) and `MarkdownParser` (registered as `"markdown"`). Both are registered at init time; the extension-based dispatch in `defaultParserMapping` routes `.md`/`.markdown` to `"markdown"`, and everything else to `"chunkx"`.
-
-**ChunkxParser** delegates to the third-party library `gomantics/chunkx` for AST-aware code chunking.
-
-**The adapter problem:** chunkx respects AST node boundaries, so a single node (e.g., a 3000-char docstring) can exceed `DefaultChunkMaxSizeChar` (1500). The library does not guarantee chunk size — it guarantees structural integrity. This is where the reconciliation/adapter function `splitChunk` (`internal/parser/chunkx.go:132`) comes in:
-
-```
-chunkx.NewChunker().Chunk(content) -> []chunkx.Chunk  (AST-respecting, possibly oversized)
-    -> for each chunkx.Chunk:
-        -> splitChunk(cx, sectionTitle, sectionNum, meta) -> []*ChunkRecord
-            -> if numChars ≤ 1500 -> 1 record (pass-through)
-            -> if numChars > 1500 -> ceil(numChars/1500) records (rune-split with line tracking)
-```
-
-`splitChunk` is the sole post-processing adapter. It re-splits oversized chunks by rune count, recomputing `LineStart`/`LineEnd` for each sub-chunk by counting newlines. This is necessary because chunkx's AST-driven output does not align with the target chunk size without an additional reconciliation pass.
-
-The design pattern: **third-party library produces semantically meaningful chunks -> adapter normalises them to the desired size constraint**, keeping the library swappable — any future chunking library would only need a similar adapter at the same point in the pipeline.
-
-### Flow: Chunking algorithm — `MarkdownParser`
-
-* `MarkdownParser` (`internal/parser/markdown.go`) is a purpose-built, line-oriented markdown chunker that respects heading boundaries and uses a 4-tier split strategy
-    * It tries to split by headings, then paragraph, then sentence, then words
-
-**Constants** (`parser.go:12-14`):
-- `DefaultChunkMaxSizeChar = 1500` — hard upper bound on chunk rune length
-- `DefaultChunkMinSizeChar = 800` — soft lower bound; flushes at heading boundaries only above this
-
-**`Parse` loop** (`markdown.go:51-151`):
-
-1. Split content on `\n` into `lines`
-2. Maintain a `chunkBuffer` (`markdown.go:42-49`):
-   - `lines []int` — indices into the `lines` slice currently in the buffer
-   - `startLine`, `startPos` — for partial-line tracking (mid-line splits)
-   - `charCount` — cumulative rune count of buffered lines (+1 for `\n` per line)
-   - `sectionNum`, `sectionTitle` — current heading context
-
-3. Iterate lines:
-   - **Heading lines** (`parseMdHeading`, line 121): if `charCount >= min (800)`, flush the buffer first. Then increment section, add heading line to new buffer.
-   - **Content lines** (line 135): append line to buffer, add `lineChars + 1` to `charCount`.
-   - **Overflow guard** (line 138): `for cur.charCount > max (1500)`, call `findSplit` + `flush`.
-
-4. Final flush at end of file (line 144).
-
-**`findSplit` — 4-tier split strategy** (`markdown.go:154-220`):
-
-Walk the buffer backward, trying each tier in order. Each tier tries to find a split point where the tail part's character count falls within `[min, max]`.
-
-| Tier | What it finds | Precedence |
-|------|---------------|------------|
-| **1. Blank line** | A blank line (`strings.TrimSpace(line) == ""`) where removing it and everything after brings `totalChars` into `[min, max]` | Highest — cleanest split |
-| **2. Sentence separator** | A `.`, `!`, or `?` rune within a line where splitting there brings the tail into `[min, max]` | |
-| **3. Word separator** | A `unicode.IsSpace` rune (same logic) | |
-| **4. Anywhere** | Any rune position (same logic) | Lowest — last resort |
-
-If no tier succeeds, returns `(0, 0)` (split at buffer start).
-
-Returns `(splitLine, reverseEndPos)` where:
-- `splitLine` = index into `cur.lines` where the split occurs
-- `reverseEndPos` = number of runes from the end of that line to skip (0 = take whole line)
-
-
-
-### Flow: Search Query
-```
-searchCmd.Run()
-    -> project.FindProject(startDir) -> proj.Init()
-    -> proj.OpenFTS() -> db
-    -> mode == "fts":
-        -> db.SearchFTS(query, collection, limit)
-            -> FTS5 MATCH query on chunks_fts JOIN chunks JOIN documents
-    -> mode == "semantic":
-        -> searchSemantic(proj, db, query, collection, limit)
-            -> embed.Embed(query) -> ONNX inference -> vector
-            -> proj.OpenCollectionVector() -> FAISS search -> labels
-            -> db.GetChunkByID(label) -> enrich with metadata
-    -> mode == "hybrid":
-        -> mergeHybridResults(ftsResults, semanticResults, limit)
-            -> RRF: sum 1/(k + rank) across both lists, sort by score
-    -> displayResults() -> group by file, print with line ranges
-```
-
-### Hybrid Ranking — `mergeHybridResults` (`cmd/grokdocs/search.go:166`)
-
-The hybrid mode combines FTS and semantic results using Reciprocal Rank Fusion (RRF). Instead of blending raw scores (which are incomparable — BM25 rank vs cosine similarity), RRF converts each result list position into a rank-based score:
-
-```
-score = sum of [ 1 / (k + rank + 1) ] for every list the item appears in
-```
-
-Where `rank` is the 0-indexed position in the result list, and `k` (default 60) is a smoothing constant. A result appearing in both lists gets a score contribution from each, naturally boosting it above results found by only one method.
-
-**Code** (`cmd/grokdocs/search.go:174-182`):
-```go
-for rank, r := range fts {
-    scores[r.ID] += 1.0 / (rrfK + float64(rank) + 1)
-    seen[r.ID] = r
-}
-for rank, r := range semantic {
-    scores[r.ID] += 1.0 / (rrfK + float64(rank) + 1)
-    if _, ok := seen[r.ID]; !ok {
-        seen[r.ID] = r
-    }
-}
-```
-
-The `seen` map deduplicates by chunk ID — if the same chunk appears in both lists, the FTS `SearchResult` struct is kept (arbitrary, since both have identical metadata) and the RRF score is the sum of both contributions. Results are then sorted descending by this combined score (`search.go:191-193`) and truncated to `limit`.
-
-The `k` constant is configurable via `--rrfk` (default 60, registered at `search.go:225`). Higher `k` flattens the rank advantage (all scores closer together); lower `k` gives more weight to top-ranked results.
+The system avoids circular package dependencies by mediating all interaction via structural boundaries:
+- **Parser Registration Strategy**: The [Parser](file://internal/parser/parser.go#L25) interface and registry mapping are defined in `internal/parser/`. Parsers register themselves automatically (`init()`) from markdown and chunkx files. The ingestion pipeline (`internal/ingest/`) calls [GetParser](file://internal/parser/parser.go#L36) dynamically to process files without hard dependency on concrete parsers.
+- **Relational Data Mapping**: Storage structures like [ChunkRecord](file://internal/project/fts.go#L98), [FileRecord](file://internal/project/fts.go#L77), and [DocumentRecord](file://internal/project/fts.go#L87) are defined in `internal/project/`. They cross packages to:
+  - `internal/parser/` (returned as a list of chunks wrapped in [ParsedDocument](file://internal/parser/parser.go#L18)).
+  - `internal/ingest/` (which passes them directly to `SaveChunksBatch`).
+  - `cmd/grokdocs/` (which reads and maps result rows inside `search.go`).
+- **Project State Lifecycle**: [Project](file://internal/project/project.go#L21) is instantiated in `cmd/grokdocs` and flows into the ingestion sync and semantic search paths to safely manage database handles (`proj.OpenFTS()`, `proj.OpenCollectionVector()`).
+- **Asynchronous Status Updates**: Background workers inside `internal/ingest/` communicate real-time CLI sync metrics using a [GuardedChan](file://internal/util/guardedchan.go#L5) progress channel defined in `internal/util/`. This decouples the worker thread loops from main thread console rendering details.
 
 ---
 
-## Side Effects / External Boundaries
+## 8. Development, Testing, and Performance Profiling
 
-### Disk Reads
-- `os.ReadFile(absPath)` in `ingestFile()` (line 444) — reads source file content
-- `os.Stat()` in `walkFiles()` + `ingestFile()` — file metadata
-- `computeSHA256()` (line 698) — hashes file content for change detection
-- `readLinesOfFile()` (line 204, search.go) — reads source file for snippet display
-- `config.LoadFromFile(path)` — reads `config.yaml`
+### Building the Project
 
-### Disk Writes
-- SQLite database at `.grokdocs/grokdocs.db` — all file/doc/chunk storage + FTS5 index
-- FAISS index at `.grokdocs/grokdocs.index` (or per-collection `grokdocs-{name}.index`)
-- Model cache at `~/.cache/grokdocs/` — downloaded ONNX model + vocab
-- Default config written at project init: `.grokdocs/config.yaml`
+Build the project using standard Go compilation. Specify build tags depending on the required search engine dependencies:
 
-### External Network
-- Model download via HTTP (HuggingFace) in `GetOrDownloadModels()` — only when `-tags onnx` is used
+* **FTS5 Search Only** (no ONNX runtime or FAISS dependencies):
+  ```bash
+  go build -tags fts5 ./cmd/grokdocs
+  ```
 
----
+* **Full-Stack Search** (FTS5 + ONNX Embeddings + FAISS Vectors):
+  ```bash
+  go build -tags "fts5 onnx" ./cmd/grokdocs
+  ```
 
-## Testing
+### Running Tests
 
-### `internal/ingest/ingest_test.go`
-- `TestFileWalking` — full integration: walks temp dir with `.md`/`.markdown` files, syncs collection, verifies file records in DB
-- `TestFileWalkingDefaultIncludeList` / `TestFileWalkingDefaultExcludeList` — default filter behavior
-- `TestMarkdownChunking` — parse markdown, verify LineStart/LineEnd/SectionNum/SectionTitle via table-driven test
-- `TestSyncAndSearchFTS` — full pipeline: sync -> FTS search -> verify results
-- `TestSyncCollectionWithFileFiltering` / `TestSyncSkipsUnchangedFile` / `TestSyncCollectionResult`
-- `TestSyncCollectionCollectionNotFound` / `TestSyncCollectionPathIsFile` / `TestSyncCollectionPathDoesNotExist`
-- `TestSyncWithVectors` — end-to-end with vector ingestion
+Unit and integration tests reside in `*_test.go` files across packages. Run tests with the relevant build tags:
 
-### `internal/ingest/glob_test.go` + `internal/ingest/walk_test.go`
-- Extensive glob matching and file walking tests (20+ test functions)
-
-### `internal/parser/chunkx_test.go`
-- `TestChunkxParserPython` — basic python file, generic invariants
-- `TestChunkxParserLongPython` — multiple chunks generated
-- `TestRawChunkxParserSingleLongNode` — chunkx's raw splitting behavior
-- `TestChunkxParserSingleLongNode` — table-driven test verifying ChunkIndex, TotalChars, LineStart, LineEnd, SectionNum after splitChunk
-
-### `internal/parser/parser_test.go`
-- `TestParseMarkdownHeaders` — table-driven header parsing
-- `TestParseHeaders` — extension-based dispatch
-
-### `internal/project/project_test.go`
-- `TestRootDiscoveryFallsBackToStartDir` / `TestRootDiscoveryFindsMarkerInAncestor`
-- `TestProjectInitializationAndLoading` / `TestReInitPreservesConfigContent` / `TestInitIsIdempotent`
-- `TestInitFailsOnInvalidRootPath`
-- `TestDatabasesLifecycle` / `TestSQLiteDatabase` / `TestGetStats`
-- `TestFAISSIndex` / `TestFAISSIndexEmpty` / `TestFAISSRemoveIDs` / `TestFAISSIndexWithDim`
-
-### `internal/config/config_test.go`
-- *(Not yet read — config loading tests)*
-
-### `internal/embed/embed_test.go`
-- `TestGetOrDownloadModels` — downloads model, verifies files exist
-- `TestONNXEmbeddings` — runs ONNX inference, validates output dimension
-
-### `internal/util/util_test.go`
-- `TestLoggerTextDefault` / `TestLoggerTextVerbose` / `TestLoggerJSONFormat`
-- `TestLoggerNonVerboseFiltersInfo` / `TestLoggerVerboseShowsTrace`
-
----
-
-## Configurations
-
-### Build Tags
-- `onnx` — enables ONNX runtime embedding pipeline (embed package + semantic search)
-- `fts5` — enables SQLite FTS5 extension (required for full-text search)
-
-### Default Config (`config.DefaultConfig()`)
-```yaml
-collections:
-  default:
-    path: docs
-    include: ["*.md", "*.go", "*.py"]
+```bash
+go test -tags fts5 ./...                      # Runs FTS5-only tests
+go test -tags "fts5 onnx" ./...               # Runs FTS5 and ONNX/FAISS tests
 ```
 
-### CLI Flags
-- `--project, -p` — project root path
-- `--verbose, -v` — verbose logging
-- `--log-format` — text or json
-- `--collection, -c` — limit search to collection
-- `--mode` — fts, semantic, hybrid
-- `--limit` — max result groups
-- `--alpha` — hybrid blend weight
+### Performance Benchmarking
+
+Go benchmarks measure execution throughput and memory allocations. 
+
+* To run all benchmarks:
+  ```bash
+  go test -tags "fts5 onnx" -bench=. -benchmem ./...
+  ```
+
+* To run a specific benchmark function (e.g. within `internal/ingest`):
+  ```bash
+  go test -tags "fts5 onnx" -bench=BenchmarkName ./internal/ingest/
+  ```
+
+### Profiling (CPU & Memory)
+
+Go's `pprof` system gathers runtime metrics for analyzing CPU cycles and heap allocations.
+
+1. **Generate Profile Files** during test or benchmark execution:
+   ```bash
+   go test -tags "fts5 onnx" -cpuprofile=cpu.pprof -memprofile=mem.pprof ./internal/parser/
+   ```
+
+2. **Inspect Profiles** using the interactive pprof visualization tool:
+   * CPU Profile:
+     ```bash
+     go tool pprof cpu.pprof
+     ```
+   * Memory Profile:
+     ```bash
+     go tool pprof mem.pprof
+     ```
+
+3. **Core pprof Interactive Commands**:
+   * `top`: Lists the top resource-consuming functions.
+   * `list <function_name>`: Displays source code annotated with execution times or memory usage line-by-line.
+   * `web`: Generates an SVG call graph and opens it in a browser.

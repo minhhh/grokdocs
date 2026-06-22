@@ -2,20 +2,21 @@
 
 ## Overview
 
-**grokdocs** is a local-first search engine that indexes your Markdown and
-code files for semantic and full-text search. It splits your documentation
-and code files into semantically meaningful chunks, generates local
+**grokdocs** is a local-first search engine that indexes your documentation,
+source code, and plain-text files for full-text and semantic search. It
+splits files into semantically meaningful chunks, generates local
 embeddings, and indexes them using SQLite (FTS5) and FAISS for fast
-similarity and keyword search.
+keyword and similarity search.
 
 ## Core Features
 
 ### 1. Document Ingestion & Chunking
 
-- **Multi-format Support**: Parse Markdown, plain text, and Go source files.
-- **Intelligent Chunking**: Use `gomantics/chunkx` to break down large
-  documents into semantically meaningful chunks rather than arbitrary
-  character counts.
+- **Multi-format Support**: Parse Markdown, source files, configuration, and
+  plain-text files — anything your project uses.
+- **Intelligent Chunking**: Uses `gomantics/chunkx` to break down documents
+  into semantically meaningful chunks based on AST structure rather than
+  arbitrary character counts.
 - **Incremental Indexing**: Track file modification times (mtime) and
   content hashes. Only re-chunk and re-embed files that have actually
   changed to save compute time.
@@ -25,42 +26,34 @@ similarity and keyword search.
 - Generate embeddings for each chunk using a local ONNX model on-device.
 - Store embeddings in a local FAISS index for semantic search, and insert chunk text into SQLite for Full-Text Search.
 - Combine vector similarity and lexical search to retrieve the most
-  relevant chunks using an adjustable hybrid weighting scheme (`--alpha`).
+  relevant chunks using Reciprocal Rank Fusion (`--rrfk`).
 
 ## Build & Installation
 
 ### Prerequisites
 
-- Go 1.21 or later.
+- Go 1.25 or later.
 - C/C++ compiler (e.g., `gcc` or `clang`) if building with CGO dependencies (such as FAISS via `go-faiss`).
 
 ### Build Tags
 
-Two build tags control feature inclusion:
+One build tag controls feature inclusion:
 
-| Tag     | Enables                                                              |
-|---------|----------------------------------------------------------------------|
-| `fts5`  | SQLite FTS5 full-text search (required for FTS functionality)        |
-| `onnx`  | Local ONNX embeddings + FAISS vector search (semantic/hybrid search) |
+| Tag    | Enables                                                                 |
+|--------|-------------------------------------------------------------------------|
+| `onnx` | Local ONNX embeddings + FAISS vector search (semantic/hybrid search)    |
 
-- Without `fts5`, the binary cannot create or query FTS5 tables.
-- Without `onnx`, the binary still supports FTS search but semantic and hybrid modes are disabled.
+Without `onnx`, the binary supports FTS search only — semantic and hybrid modes are disabled.
 
-### Building from Source
-
-Build with FTS5 only (FTS search, no vector/semantic search):
+The `fts5` SQLite extension must be enabled at the CGO level for FTS functionality.
+The `mattn/go-sqlite3` driver requires the `fts5` build tag to enable it:
 
 ```bash
-go build -tags fts5 ./cmd/grokdocs
+go build -tags fts5 ./cmd/grokdocs              # FTS search only
+go build -tags "fts5 onnx" ./cmd/grokdocs        # FTS + semantic search
 ```
 
-Build with full capabilities (FTS5 + ONNX + FAISS):
-
-```bash
-go build -tags fts5,onnx ./cmd/grokdocs
-```
-
-This produces a `grokdocs` executable in the root directory.
+This produces a `grokdocs` executable in the current directory.
 
 You can inject a version string at build time via `ldflags`. The version is
 displayed by `grokdocs --version` (or `grokdocs version`). When not set, it
@@ -81,7 +74,7 @@ go build -tags fts5 -o grokdocs ./cmd/grokdocs
 Install the binary to `$GOPATH/bin` so it's available from anywhere:
 
 ```bash
-go install -tags fts5,onnx -ldflags "-X main.version=1.0.0" ./cmd/grokdocs
+go install -tags "fts5 onnx" -ldflags "-X main.version=1.0.0" ./cmd/grokdocs
 ```
 
 Ensure `$(go env GOPATH)/bin` is in your `PATH`.
@@ -94,23 +87,15 @@ Run all tests that don't require build tags (some tests may be skipped):
 go test ./...
 ```
 
-Run tests with FTS5 only:
+Run tests:
 
 ```bash
-go test -tags fts5 ./...
-```
-
-Run tests with full capabilities (FTS5 + ONNX + FAISS):
-
-```bash
-go test -tags fts5,onnx ./...
+go test -tags fts5 ./...                           # FTS tests only
+go test -tags "fts5 onnx" ./...                     # FTS + semantic tests
 ```
 
 Tests gated behind `//go:build onnx` (embedding, vector ingestion, semantic
-search) are only compiled and executed when the `onnx` tag is supplied. The
-`fts5` tag is required by `mattn/go-sqlite3` at the CGO level to enable the
-FTS5 extension — without it, any test or operation touching FTS5 tables will
-fail.
+search) are only compiled and executed when the `onnx` tag is supplied.
 
 ### Quick Start
 
@@ -127,9 +112,9 @@ To view all available commands and flags, run:
 ```text
 my-project/
 ├── .grokdocs/
-│   ├── config.yaml      # Project configuration
-│   ├── grokdocs.db      # FTS database
-│   └── grokdocs.index   # Vector database (FAISS index)
+│   ├── config.yaml              # Project configuration
+│   ├── grokdocs.db              # FTS database
+│   └── grokdocs-default.index   # Vector database (FAISS index, per collection)
 ├── docs/
 │   └── readme.md
 └── src/
@@ -145,8 +130,30 @@ collections:
   default:
     path: "."
     parsers:
-      - markdown
+      .md: markdown
 ```
+
+### File Filtering
+
+Control which files get ingested with `files`, `include`, and `exclude`:
+
+```yaml
+collections:
+  default:
+    path: "."
+    include:
+      - "*.md"
+      - "src/**/*.go"
+    exclude:
+      - "vendor/**"
+      - "*_test.go"
+```
+
+- `files`: explicit filenames or paths (basename or full-path match). Files matched here are **always** indexed — `exclude` cannot remove them. When `files` is set, the final set is the union of `files` and `include` matches, but `exclude` is not applied.
+- `include`: glob whitelist (supports `**`). Matches are added to the index unless filtered out by `exclude`.
+- `exclude`: glob blacklist (supports `**`). Removes matching files from the `include` set. Has no effect when `files` is set.
+
+When both `files` and `include` are omitted, a built-in default allowlist covers common source and doc extensions (`.md`, `.go`, `.py`, `.rs`, `.toml`, etc.). A default exclude list skips `.git`, `node_modules`, `vendor`, `__pycache__`, and similar.
 
 ### Root Directory Lookup Algorithm
 
@@ -160,35 +167,44 @@ workspace root. If the flag is omitted:
 
 ## CLI Interface
 
-All commands support the global `-p, --project <path>` flag. If `-p` is
-omitted, the CLI uses the lookup algorithm above to discover the project
-workspace.
+All commands support the global `-p, --project <path>` flag and `-v, --verbose` for verbose logging.
+If `-p` is omitted, the CLI uses the lookup algorithm above to discover the project workspace.
 
 - `grokdocs init`: Initialize the workspace and generate a default
   configuration file (`config.yaml`) inside the `.grokdocs` directory.
+
 - `grokdocs sync`: Scan directories and synchronize files into the SQLite database.
   - `--all`: Sync all configured collections.
   - `--collection <name>`: Sync only the specified collection.
-- `grokdocs search "<query>"`: Search indexed files and return matching
-  chunks grouped by file.
+  - `--prune`: Remove orphaned file records (default: `true`).
+  - `--concurrency <n>`: Number of files to process concurrently (default: `1`).
+  - `--embed`: Compute and store vector embeddings during sync.
+
+- `grokdocs embed`: Compute and store vector embeddings for existing chunks.
+  - `--all`: Embed all configured collections.
+  - `--collection <name>`: Embed only the specified collection.
+  - `--concurrency <n>`: Number of chunks to embed concurrently (default: `1`).
+  - `--rebuild`: Clear and re-embed all chunks.
+  - `--prune`: Remove orphaned vectors after embedding (default: `true`).
+
+- `grokdocs search "<query>"`: Search indexed files and return matching chunks.
 
   ```text
-  <query>:
+  [0] docs/architecture.md - 1 chunks
+    [0] Architecture [L1-L35] — score: 0.123 (architecture-docs-architecture-md--0)
 
-  [0] docs/architecture.md: - 1 chunks
-    [1] Architecture [L1-L35]
-
-  [1] internal/parser/chunkx.go: - 2 chunks
-    [1] [L1-L107]
-    [2] [L108-L200]
-
-  [2] README.md: - 1 chunks
-    [1] grokdocs [L1-L56]
+  [1] internal/parser/chunkx.go - 2 chunks
+    [0] [L1-L107] — score: 0.456 (default-internal-parser-chunkx-go--0)
+    [1] [L108-L200] — score: 0.321 (default-internal-parser-chunkx-go--1)
   ```
 
-  - `--collection <name>`: Limit search query to the specified collection.
-  - `--mode <hybrid|fts|semantics>`: Specify the search strategy (default: `hybrid`).
-   - `--limit <int>`: Number of results to return (default: 5).
+  - `--collection <name>`: Limit search to a specific collection.
+  - `--mode <hybrid|fts|semantic>`: Search strategy (default: `hybrid`).
+  - `--limit <n>`: Number of results to return (default: `5`).
+  - `--rrfk <k>`: RRF constant for hybrid ranking (default: `60`).
+
+- `grokdocs stats`: Show project statistics.
+- `grokdocs version`: Print version.
 
 ### Profiling
 
