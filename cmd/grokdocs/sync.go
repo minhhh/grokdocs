@@ -74,18 +74,18 @@ var syncCmd = &cobra.Command{
 		}
 
 		for _, coll := range targets {
-			bar := progressbar.NewOptions(-1,
-				progressbar.OptionSetDescription("Processing files"),
-				progressbar.OptionSetWriter(os.Stderr),
-				progressbar.OptionShowCount(),
-				progressbar.OptionThrottle(100*time.Millisecond),
-			)
-
 			progress := util.NewGuardedChan[ingest.SyncProgress](10)
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+
+				bar := progressbar.NewOptions(-1,
+					progressbar.OptionSetDescription("Processing files"),
+					progressbar.OptionSetWriter(os.Stderr),
+					progressbar.OptionShowCount(),
+					progressbar.OptionThrottle(100*time.Millisecond),
+				)
 				for progressUpdate := range progress.Ch() {
 					switch progressUpdate.Phase {
 					case "Processing":
@@ -93,14 +93,35 @@ var syncCmd = &cobra.Command{
 							bar.ChangeMax(progressUpdate.TotalFiles)
 							if progressUpdate.FilesProcessed == progressUpdate.TotalFiles {
 								bar.Finish()
+								bar = nil
 								fmt.Fprintln(os.Stderr)
 							}
 						}
-						if !bar.IsFinished() {
+						if bar != nil && !bar.IsFinished() {
 							bar.Set(progressUpdate.FilesProcessed)
 						}
 					case "Embedding":
 						fmt.Fprintf(os.Stderr, "Embedding %d chunks...\n", progressUpdate.TotalFiles)
+					case "Pruning":
+						if bar == nil {
+							bar = progressbar.NewOptions(-1,
+								progressbar.OptionSetDescription("Pruning files"),
+								progressbar.OptionSetWriter(os.Stderr),
+								progressbar.OptionShowCount(),
+								progressbar.OptionThrottle(100*time.Millisecond),
+							)
+						}
+						if progressUpdate.TotalFiles > 0 {
+							bar.ChangeMax(progressUpdate.TotalFiles)
+							if progressUpdate.FilesProcessed == progressUpdate.TotalFiles {
+								bar.Finish()
+								bar = nil
+								fmt.Fprintln(os.Stderr)
+							}
+						}
+						if bar != nil && !bar.IsFinished() {
+							bar.Set(progressUpdate.FilesProcessed)
+						}
 					}
 				}
 			}()

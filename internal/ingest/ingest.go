@@ -258,94 +258,88 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 	)
 
 	g, ctx := errgroup.WithContext(context.Background())
-	semaphore := make(chan struct{}, concurrency)
-
-	// Count total number of files
+	queue := NewWalkQueue()
 	totalFiles := 0
+
+	// Walker: discover files and push to queue (never blocks)
 	g.Go(func() error {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
+		defer queue.Close()
 		count := 0
 		for wr := range walkFiles(ctx, absCollectionPath, fileFilter) {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
 			if wr.Err != nil {
 				continue
 			}
 			count++
+			queue.Push(wr)
 		}
 		totalFiles = count
 		return nil
 	})
 
-	for walkResult := range walkFiles(ctx, absCollectionPath, fileFilter) {
-		if walkResult.Err != nil {
-			continue
-		}
-
-		// Make path project-root-relative for storage and parser resolution
-		relPath := filepath.Join(cfg.Path, walkResult.RelPath)
-
-		semaphore <- struct{}{}
+	// Workers: process files from queue
+	numWorkers := concurrency
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+	for i := 0; i < numWorkers; i++ {
 		g.Go(func() error {
-			defer func() { <-semaphore }()
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
 
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
+				wr, ok := queue.Pop()
+				if !ok {
+					return nil
+				}
+
+				relPath := filepath.Join(cfg.Path, wr.RelPath)
+
+				parserName, ok := parser.ResolveParserName(proj.Config, collectionName, relPath)
+				if !ok {
+					util.Logger.Warn().Str("path", relPath).Msg("no parser matched for file, skipping")
+					continue
+				}
+				if _, registered := parser.GetParser(parserName); !registered {
+					util.Logger.Warn().Str("path", relPath).Str("parser", parserName).Msg("parser not registered, skipping")
+					continue
+				}
+
+				seenMu.Lock()
+				seenFiles[relPath] = true
+				seenMu.Unlock()
+
+				state, hash, chunks, err := ingestFile(db, relPath, wr.AbsPath, collectionName, parserName, proj.Config)
+				if err != nil {
+					return err
+				}
+
+				if state != FileUnchanged && len(chunks) > 0 && syncEmbed {
+					pendingVecMu.Lock()
+					pendingVecChunks = append(pendingVecChunks, chunks...)
+					pendingVecMu.Unlock()
+				}
+
+				resultMu.Lock()
+				switch state {
+				case FileUnchanged:
+					result.Unchanged++
+				case FileAdded:
+					result.Added++
+					newFileHashes[hash] = FileAdded
+				case FileModified:
+					result.Modified++
+					newFileHashes[hash] = FileModified
+				}
+				resultMu.Unlock()
+
+				if progress != nil {
+					currentCount := atomic.AddInt32(&processedCount, 1)
+					progress.Send(SyncProgress{FilesProcessed: int(currentCount), Phase: "Processing", TotalFiles: totalFiles})
+				}
 			}
-
-			parserName, ok := parser.ResolveParserName(proj.Config, collectionName, relPath)
-			if !ok {
-				util.Logger.Warn().Str("path", relPath).Msg("no parser matched for file, skipping")
-				return nil
-			}
-			if _, registered := parser.GetParser(parserName); !registered {
-				util.Logger.Warn().Str("path", relPath).Str("parser", parserName).Msg("parser not registered, skipping")
-				return nil
-			}
-
-			seenMu.Lock()
-			seenFiles[relPath] = true
-			seenMu.Unlock()
-
-			state, hash, chunks, err := ingestFile(db, relPath, walkResult.AbsPath, collectionName, parserName, proj.Config)
-			if err != nil {
-				return err
-			}
-
-			if state != FileUnchanged && len(chunks) > 0 && syncEmbed {
-				pendingVecMu.Lock()
-				pendingVecChunks = append(pendingVecChunks, chunks...)
-				pendingVecMu.Unlock()
-			}
-
-			resultMu.Lock()
-			switch state {
-			case FileUnchanged:
-				result.Unchanged++
-			case FileAdded:
-				result.Added++
-				newFileHashes[hash] = FileAdded
-			case FileModified:
-				result.Modified++
-				newFileHashes[hash] = FileModified
-			}
-			resultMu.Unlock()
-
-			if progress != nil {	
-				currentCount := atomic.AddInt32(&processedCount, 1)
-				progress.Send(SyncProgress{FilesProcessed: int(currentCount), Phase: "Processing", TotalFiles: totalFiles})
-			}
-
-			return nil
 		})
 	}
 
@@ -354,7 +348,9 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 	}
 
 	if len(pendingVecChunks) > 0 && vectorIngestFn != nil {
-		progress.Send(SyncProgress{FilesProcessed: 0, Phase: "Embedding", TotalFiles: len(pendingVecChunks)})
+		if progress != nil {
+			progress.Send(SyncProgress{FilesProcessed: 0, Phase: "Embedding", TotalFiles: len(pendingVecChunks)})
+		}
 		if err := vectorIngestFn(proj, collectionName, pendingVecChunks); err != nil {
 			util.Logger.Warn().Err(err).Msg("vector ingestion failed")
 		}
@@ -369,6 +365,11 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 	if prune {
 		var deleteIDs []int64
 		var deletedChunkIDs []int64
+
+		if progress != nil {
+			progress.Send(SyncProgress{Phase: "Pruning", TotalFiles: 4})
+		}
+
 		for _, collectionFile := range dbFiles {
 			seenMu.Lock()
 			_, ok := seenFiles[collectionFile.Path]
@@ -391,10 +392,18 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 				deletedChunkIDs = append(deletedChunkIDs, chunkIDs...)
 			}
 		}
+
+		if progress != nil {
+			progress.Send(SyncProgress{FilesProcessed: 1, Phase: "Pruning", TotalFiles: 4})
+		}
+
 		if len(deleteIDs) > 0 {
 			if err := db.DeleteFilesBatch(deleteIDs); err != nil {
 				util.Logger.Error().Err(err).Int("count", len(deleteIDs)).Msg("failed to batch delete files")
 				return SyncResult{}, err
+			}
+			if progress != nil {
+				progress.Send(SyncProgress{FilesProcessed: 2, Phase: "Pruning", TotalFiles: 4})
 			}
 		}
 
@@ -411,6 +420,9 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 					}
 				}
 			}
+			if progress != nil {
+				progress.Send(SyncProgress{FilesProcessed: 3, Phase: "Pruning", TotalFiles: 4})
+			}
 		}
 
 		// Remove orphaned documents (file_id points to a file that no longer exists).
@@ -419,6 +431,9 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 		if err := db.DeleteOrphanedDocuments(collectionName); err != nil {
 			util.Logger.Error().Err(err).Str("collection", collectionName).Msg("failed to cleanup orphaned documents")
 			return SyncResult{}, err
+		}
+		if progress != nil {
+			progress.Send(SyncProgress{FilesProcessed: 4, Phase: "Pruning", TotalFiles: 4})
 		}
 	}
 
