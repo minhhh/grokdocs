@@ -30,8 +30,19 @@ jobs:
           go-version: stable
       - uses: actions/checkout@v4
 
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-activate-base: true
+          auto-update-conda: false
+
       - name: Install FAISS
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libfaiss-dev
+        shell: bash -el {0}
+        run: |
+          conda install -c pytorch -c conda-forge faiss-cpu=1.14.3
+          {
+            echo "CGO_CFLAGS=-I$CONDA_PREFIX/include"
+            echo "CGO_LDFLAGS=-L$CONDA_PREFIX/lib"
+          } >> "$GITHUB_ENV"
 
       - name: Download ONNX Runtime
         run: |
