@@ -62,6 +62,10 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install faiss onnxruntime
+          {
+            echo "CGO_CFLAGS=-I$(brew --prefix)/include"
+            echo "CGO_LDFLAGS=-L$(brew --prefix)/lib"
+          } >> "$GITHUB_ENV"
 
       - name: Build FTS-only binary
         run: |
