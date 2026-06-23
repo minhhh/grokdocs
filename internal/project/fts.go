@@ -701,6 +701,58 @@ func (fts *FTSDatabase) SearchFTS(queryText string, collection string, limit int
 	return results, nil
 }
 
+// DocumentFileInfo represents a file indexed in a collection.
+type DocumentFileInfo struct {
+	FilePath   string
+	Slug       string
+	ChunkCount int
+	TotalChars int
+	Metadata   string
+}
+
+// ListCollectionFilesPaginated returns paginated file info for a given collection.
+func (fts *FTSDatabase) ListCollectionFilesPaginated(collection string, limit, offset int) ([]*DocumentFileInfo, int, error) {
+	fts.mu.Lock()
+	defer fts.mu.Unlock()
+
+	var total int
+	err := fts.db.QueryRow(
+		"SELECT COUNT(*) FROM documents WHERE collection = ?", collection,
+	).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	query := `
+		SELECT f.file_path, d.slug, d.chunk_count, d.total_chars, COALESCE(d.metadata, '')
+		FROM documents d
+		JOIN files f ON f.id = d.file_id
+		WHERE d.collection = ?
+		ORDER BY f.file_path`
+	var args []any
+	args = append(args, collection)
+	if limit > 0 {
+		query += " LIMIT ? OFFSET ?"
+		args = append(args, limit, offset)
+	}
+
+	rows, err := fts.db.Query(query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var results []*DocumentFileInfo
+	for rows.Next() {
+		r := &DocumentFileInfo{}
+		if err := rows.Scan(&r.FilePath, &r.Slug, &r.ChunkCount, &r.TotalChars, &r.Metadata); err != nil {
+			return nil, 0, err
+		}
+		results = append(results, r)
+	}
+	return results, total, nil
+}
+
 // DBStats represents index statistics queried from the database.
 type DBStats struct {
 	TotalFiles          int64

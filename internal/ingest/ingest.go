@@ -76,6 +76,7 @@ var defaultExcludeList = []string{
 	"target",
 	".next",
 	".nuxt",
+	".terraform",
 	"out",
 	"bin",
 	"obj",
@@ -83,6 +84,7 @@ var defaultExcludeList = []string{
 	"temp",
 	"CVS",
 	"pytest_cache",
+	"PackageCache",
 
 	// Files
 	".DS_Store",
