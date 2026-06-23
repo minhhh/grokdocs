@@ -157,6 +157,7 @@ func setSharedLibraryPath() {
 	candidates := []string{
 		"/opt/homebrew/lib/libonnxruntime.dylib",
 		"/usr/local/lib/libonnxruntime.dylib",
+		"/usr/local/lib/libonnxruntime.so",
 		"/home/linuxbrew/.linuxbrew/lib/libonnxruntime.so",
 		"libonnxruntime.so",
 	}
