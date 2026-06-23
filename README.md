@@ -1,5 +1,11 @@
 # grokdocs
 
+<p align="center">
+  <a href="https://github.com/minhhh/grokdocs/actions/workflows/test.yml"><img src="https://github.com/minhhh/grokdocs/actions/workflows/test.yml/badge.svg" alt="Test"></a>
+  <a href="https://gist.github.com/minhhh/79b46a3203708fe79d36f20b15493ba3"><img src="https://gist.githubusercontent.com/minhhh/79b46a3203708fe79d36f20b15493ba3/raw/coverage.svg" alt="Coverage"></a>
+  <a href="https://github.com/minhhh/grokdocs/releases"><img src="https://img.shields.io/github/v/release/minhhh/grokdocs" alt="Release"></a>
+</p>
+
 ## Overview
 
 **grokdocs** is a local-first search engine that indexes your documentation,
@@ -19,7 +25,7 @@ keyword and similarity search.
   strategy) and AST-based chunking via `gomantics/chunkx` for 30+ languages.
 - **Incremental Sync**: Tracks mtime + SHA-256 content hash per file.
   Only re-chunks and re-embeds files that have actually changed.
-- **Three-Tier File Filtering**: `files` (explicit, exclude-proof),
+- **File Filtering similar to tsconfig**: `files` (explicit, exclude-proof),
   `include` (glob whitelist), `exclude` (glob blacklist) — with `**`
   recursive matching and basename vs full-path semantics.
 
@@ -343,3 +349,7 @@ for analysis with `go tool pprof`:
 go tool pprof -http :8080 cpu.pprof
 go tool pprof -http :8081 mem.pprof
 ```
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.

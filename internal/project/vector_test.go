@@ -187,3 +187,47 @@ func TestFAISSIndexWithDim(t *testing.T) {
 		t.Errorf("expected dim 8, got %d", vdb.Dim())
 	}
 }
+
+func TestDatabasesLifecycle(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	proj, err := NewProject(tmpDir)
+	if err != nil {
+		t.Fatalf("NewProject failed: %v", err)
+	}
+
+	if err := proj.Init(); err != nil {
+		t.Fatalf("proj.Init() failed: %v", err)
+	}
+	fts, err := proj.OpenFTS()
+	if err != nil {
+		t.Fatalf("OpenFTS failed: %v", err)
+	}
+	if fts.DB() == nil {
+		t.Fatalf("expected sql.DB to be initialized")
+	}
+
+	if err := fts.DB().Ping(); err != nil {
+		t.Fatalf("sqlite ping failed: %v", err)
+	}
+
+	vec, err := proj.OpenVector(384)
+	if err != nil {
+		t.Fatalf("OpenVector failed: %v", err)
+	}
+	if err := vec.Save(); err != nil {
+		t.Fatalf("Vector Save failed: %v", err)
+	}
+
+	if _, err := os.Stat(vec.IndexPath); err != nil {
+		t.Fatalf("expected vector index file to exist: %v", err)
+	}
+
+	if err := proj.Close(); err != nil {
+		t.Fatalf("proj.Close() failed: %v", err)
+	}
+
+	if err := fts.DB().Ping(); err == nil {
+		t.Error("expected old FTS handle to be closed after proj.Close()")
+	}
+}

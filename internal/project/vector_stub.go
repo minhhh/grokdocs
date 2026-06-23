@@ -4,7 +4,9 @@ package project
 
 import "errors"
 
-type VectorDatabase struct{}
+type VectorDatabase struct {
+	IndexPath string
+}
 
 func OpenVectorDatabase(_ string, _ int) (*VectorDatabase, error) {
 	return nil, errors.New("vector search requires building with -tags onnx")
