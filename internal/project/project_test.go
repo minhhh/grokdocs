@@ -536,3 +536,122 @@ func TestGetStats(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexName(t *testing.T) {
+	got := CollectionIndexName("mydocs")
+	want := "grokdocs-mydocs.index"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestNewProject_RelativePath(t *testing.T) {
+	proj, err := NewProject(".")
+	if err != nil {
+		t.Fatalf("NewProject('.') failed: %v", err)
+	}
+	abs, _ := filepath.Abs(".")
+	if proj.RootPath != abs {
+		t.Errorf("expected root %q, got %q", abs, proj.RootPath)
+	}
+}
+
+func TestFindProject_AbsoluteError(t *testing.T) {
+	// FindProject with an invalid path deep enough that Abs fails
+	// We can't easily trigger Abs failure, so just verify the normal case works
+	proj, err := FindProject(t.TempDir())
+	if err != nil {
+		t.Fatalf("FindProject failed: %v", err)
+	}
+	if proj.RootPath == "" {
+		t.Error("expected non-empty RootPath")
+	}
+}
+
+func TestOpenFTS_Caching(t *testing.T) {
+	tmpDir := t.TempDir()
+	proj, err := NewProject(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proj.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	db1, err := proj.OpenFTS()
+	if err != nil {
+		t.Fatalf("first OpenFTS failed: %v", err)
+	}
+	db2, err := proj.OpenFTS()
+	if err != nil {
+		t.Fatalf("second OpenFTS failed: %v", err)
+	}
+	if db1 != db2 {
+		t.Error("expected same cached instance")
+	}
+}
+
+func TestClose_WithOpenDB(t *testing.T) {
+	tmpDir := t.TempDir()
+	proj, err := NewProject(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proj.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := proj.OpenFTS(); err != nil {
+		t.Fatal(err)
+	}
+	if err := proj.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+}
+
+func TestClose_DoubleClose(t *testing.T) {
+	tmpDir := t.TempDir()
+	proj, err := NewProject(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proj.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := proj.OpenFTS(); err != nil {
+		t.Fatal(err)
+	}
+	if err := proj.Close(); err != nil {
+		t.Fatalf("first Close failed: %v", err)
+	}
+	if err := proj.Close(); err != nil {
+		t.Fatalf("second Close (nil ftsDB) failed: %v", err)
+	}
+}
+
+func TestInit_InvalidConfigFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	proj, err := NewProject(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(proj.ConfigDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proj.ConfigDir, ConfigFileName), []byte("invalid: [[["), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := proj.Init(); err == nil {
+		t.Error("expected Init to fail with invalid config.yaml")
+	}
+}
+
+func TestNewProject_EmptyPath(t *testing.T) {
+	proj, err := NewProject("")
+	if err != nil {
+		t.Fatalf("NewProject('') failed: %v", err)
+	}
+	abs, _ := filepath.Abs(".")
+	if proj.RootPath != abs {
+		t.Errorf("expected root %q, got %q", abs, proj.RootPath)
+	}
+}
+

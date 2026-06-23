@@ -118,23 +118,60 @@ go install -tags "fts5 onnx" -ldflags "-X main.version=0.0.1" ./cmd/grokdocs
 
 Ensure `$(go env GOPATH)/bin` is in your `PATH`.
 
-### Running Tests
+### Testing
 
-Run all tests that don't require build tags (some tests may be skipped):
-
-```bash
-go test ./...
-```
-
-Run tests:
+Run tests with the appropriate build tags. The `fts5` tag is always required;
+the `onnx` tag enables embedding, vector ingestion, and semantic search tests.
 
 ```bash
-go test -tags fts5 ./...                           # FTS tests only
-go test -tags "fts5 onnx" ./...                     # FTS + semantic tests
+go test -tags fts5 ./...                          # FTS tests only
+go test -tags "fts5 onnx" ./...                   # FTS + semantic tests
 ```
 
-Tests gated behind `//go:build onnx` (embedding, vector ingestion, semantic
-search) are only compiled and executed when the `onnx` tag is supplied.
+Tests in files with `//go:build onnx` are only compiled when the `onnx` tag
+is supplied.
+
+#### Code Coverage
+
+Generate a coverage profile and view results:
+
+```bash
+# Run tests with coverage
+go test -tags "fts5 onnx" -coverprofile=coverage.out ./...
+
+# View per-function coverage in the terminal
+go tool cover -func=coverage.out
+
+# Open an interactive HTML report in the browser
+go tool cover -html=coverage.out
+```
+
+The per-package coverage summary is printed at the end of the test run:
+
+```
+ok  	github.com/minhhh/grokdocs/cmd/grokdocs	5.1s	coverage: 18.7% of statements
+ok  	github.com/minhhh/grokdocs/internal/config	4.4s	coverage: 100.0% of statements
+...
+total:								(statements)			70.1%
+```
+
+#### Coverage Badge
+
+The CI pipeline (`.github/workflows/test.yml`) computes coverage and publishes
+a shields.io SVG badge to a GitHub Gist on every push. The badge URL is:
+
+```
+https://gist.githubusercontent.com/minhhh/79b46a3203708fe79d36f20b15493ba3/raw/coverage.svg
+```
+
+#### Writing Tests
+
+- Test files use `*_test.go` naming in the same package as the code under test.
+- ONNX-gated tests go in files with `//go:build onnx` at the top.
+- FTS database tests should use `file::memory:?cache=shared` for an isolated
+  in-memory SQLite backend.
+- Helper functions (`setupTestDB`, `insertTestFile`, etc.) are defined in
+  `internal/project/fts_test.go` and reused across project-level test files.
 
 ### Quick Start
 

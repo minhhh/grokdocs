@@ -86,4 +86,47 @@ func TestLoggerVerboseShowsTrace(t *testing.T) {
 	}
 }
 
+func TestLoggerVerboseLevelLabels(t *testing.T) {
+	var buf bytes.Buffer
+	InitLogger(&buf, true, FormatText)
+
+	Logger.Error().Int("code", 500).Msg("error message")
+	Logger.Warn().Msg("warn message")
+
+	output := buf.String()
+	if !strings.Contains(output, "ERR") {
+		t.Errorf("expected ERR level label, got %q", output)
+	}
+	if !strings.Contains(output, "WRN") {
+		t.Errorf("expected WRN level label, got %q", output)
+	}
+	if !strings.Contains(output, "code=500") {
+		t.Errorf("expected code=500 field, got %q", output)
+	}
+}
+
+func TestLoggerMinimalErrorPrefix(t *testing.T) {
+	var buf bytes.Buffer
+	InitLogger(&buf, false, FormatText)
+
+	Logger.Error().Msg("this is an error")
+
+	output := buf.String()
+	if !strings.Contains(output, "ERROR: this is an error") {
+		t.Errorf("expected ERROR prefix, got %q", output)
+	}
+}
+
+func TestLoggerMinimalWarnPrefix(t *testing.T) {
+	var buf bytes.Buffer
+	InitLogger(&buf, false, FormatText)
+
+	Logger.Warn().Msg("this is a warning")
+
+	output := buf.String()
+	if !strings.Contains(output, "WARN: this is a warning") {
+		t.Errorf("expected WARN prefix, got %q", output)
+	}
+}
+
 

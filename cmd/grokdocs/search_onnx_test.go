@@ -79,6 +79,29 @@ func TestSearchSemanticLimitExceedsAvailable(t *testing.T) {
 	t.Logf("limit=%d, vectors=%d, results=%d", limit, vdb.Len(), len(results))
 }
 
+func TestMakeSnippet(t *testing.T) {
+	tests := []struct {
+		text   string
+		maxLen int
+		want   string
+	}{
+		{"hello world", 50, "hello world"},
+		{"hello", 3, "hel..."},
+		{"", 10, ""},
+		{"abcdef", 6, "abcdef"},
+		{"abcdef", 5, "abcde..."},
+	}
+
+	for _, tt := range tests {
+		t.Run("", func(t *testing.T) {
+			got := makeSnippet(tt.text, tt.maxLen)
+			if got != tt.want {
+				t.Errorf("makeSnippet(%q, %d) = %q, want %q", tt.text, tt.maxLen, got, tt.want)
+			}
+		})
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

@@ -18,6 +18,58 @@ var (
 	filesOffset     int
 )
 
+func runFiles(startDir string) error {
+	if startDir == "" {
+		startDir = DefaultStartDir
+	}
+	proj, err := project.FindProject(startDir)
+	if err != nil {
+		return err
+	}
+	if err := proj.Init(); err != nil {
+		return err
+	}
+	defer proj.Close()
+
+	db, err := proj.OpenFTS()
+	if err != nil {
+		return err
+	}
+
+	var targets []string
+	if filesAll {
+		for name := range proj.Config.Collections {
+			targets = append(targets, name)
+		}
+	} else if filesCollection != "" {
+		project.AssertCollectionValid(proj, filesCollection)
+		targets = []string{filesCollection}
+	} else {
+		targets = []string{config.DefaultCollectionName}
+	}
+
+	for _, coll := range targets {
+		results, total, err := db.ListCollectionFilesPaginated(coll, filesLimit, filesOffset)
+		if err != nil {
+			util.Logger.Error().Err(err).Str("collection", coll).Msg("failed to list files")
+			return err
+		}
+
+		absPath := filepath.Join(proj.RootPath, proj.Config.Collections[coll].Path)
+		fmt.Printf("Collection %q (%s): %d files\n", coll, absPath, total)
+
+		if filesLimit > 0 && (filesOffset > 0 || filesLimit < total) {
+			end := filesOffset + len(results)
+			fmt.Printf("  Showing %d-%d of %d\n", filesOffset+1, end, total)
+		}
+
+		for _, r := range results {
+			fmt.Printf("  %s  (%d chunks, %d chars)\n", r.FilePath, r.ChunkCount, r.TotalChars)
+		}
+	}
+	return nil
+}
+
 var filesCmd = &cobra.Command{
 	Use:   "files",
 	Short: "List files in a collection",
@@ -29,54 +81,8 @@ var filesCmd = &cobra.Command{
 		}
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		startDir := projectPath
-		if startDir == "" {
-			startDir = DefaultStartDir
-		}
-		proj, err := project.FindProject(startDir)
-		if err != nil {
+		if err := runFiles(projectPath); err != nil {
 			os.Exit(1)
-		}
-		if err := proj.Init(); err != nil {
-			os.Exit(1)
-		}
-		defer proj.Close()
-
-		db, err := proj.OpenFTS()
-		if err != nil {
-			os.Exit(1)
-		}
-
-		var targets []string
-		if filesAll {
-			for name := range proj.Config.Collections {
-				targets = append(targets, name)
-			}
-		} else if filesCollection != "" {
-			project.AssertCollectionValid(proj, filesCollection)
-			targets = []string{filesCollection}
-		} else {
-			targets = []string{config.DefaultCollectionName}
-		}
-
-		for _, coll := range targets {
-			results, total, err := db.ListCollectionFilesPaginated(coll, filesLimit, filesOffset)
-			if err != nil {
-				util.Logger.Error().Err(err).Str("collection", coll).Msg("failed to list files")
-				os.Exit(1)
-			}
-
-			absPath := filepath.Join(proj.RootPath, proj.Config.Collections[coll].Path)
-			fmt.Printf("Collection %q (%s): %d files\n", coll, absPath, total)
-
-			if filesLimit > 0 && (filesOffset > 0 || filesLimit < total) {
-				end := filesOffset + len(results)
-				fmt.Printf("  Showing %d-%d of %d\n", filesOffset+1, end, total)
-			}
-
-			for _, r := range results {
-				fmt.Printf("  %s  (%d chunks, %d chars)\n", r.FilePath, r.ChunkCount, r.TotalChars)
-			}
 		}
 	},
 }

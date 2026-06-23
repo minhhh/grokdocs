@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	//"path/filepath"
 	"sort"
 	"strings"
 
@@ -25,6 +24,94 @@ var (
 // semanticSearchFn is set by onnx-enabled builds; nil otherwise.
 var semanticSearchFn func(proj *project.Project, ftsDB *project.FTSDatabase, query, collection string, limit int) ([]*project.SearchResult, error)
 
+func runSearch(query, startDir string) error {
+	if startDir == "" {
+		startDir = DefaultStartDir
+	}
+	proj, err := project.FindProject(startDir)
+	if err != nil {
+		return err
+	}
+	if err := proj.Init(); err != nil {
+		return err
+	}
+
+	switch searchMode {
+	case "fts", "semantic", "hybrid":
+	default:
+		return fmt.Errorf("invalid search mode %q (use: fts, semantic, hybrid)", searchMode)
+	}
+
+	db, err := proj.OpenFTS()
+	if err != nil {
+		return err
+	}
+	defer proj.Close()
+
+	limit := searchLimit * searchGroupMultiplier
+	var results []*project.SearchResult
+
+	if searchCollection == "" {
+		searchCollection = config.DefaultCollectionName
+	} else {
+		project.AssertCollectionValid(proj, searchCollection)
+	}
+
+	if err := initEmbedder(); err != nil {
+		util.Logger.Error().Err(err).Msg("failed to initialize embedder")
+		return nil
+	}
+	defer closeEmbedder()
+
+	flatDisplay := false
+	switch searchMode {
+	case "fts":
+		results, err = db.SearchFTS(query, searchCollection, limit)
+	case "semantic":
+		if semanticSearchFn == nil {
+			util.Logger.Warn().Msg("semantic search unavailable (compile with -tags onnx); falling back to fts")
+			results, err = db.SearchFTS(query, searchCollection, limit)
+		} else {
+			results, err = semanticSearchFn(proj, db, query, searchCollection, limit)
+			flatDisplay = true
+		}
+	case "hybrid":
+		ftsResults, ftsErr := db.SearchFTS(query, searchCollection, limit)
+		if ftsErr != nil {
+			err = ftsErr
+			break
+		}
+		var semanticResults []*project.SearchResult
+		if semanticSearchFn != nil {
+			var semErr error
+			semanticResults, semErr = semanticSearchFn(proj, db, query, searchCollection, limit)
+			if semErr != nil {
+				util.Logger.Warn().Err(semErr).Msg("semantic search failed, using FTS only")
+				results = ftsResults
+				break
+			}
+		} else {
+			util.Logger.Warn().Msg("semantic search unavailable (compile with -tags onnx); using FTS only")
+			results = ftsResults
+			break
+		}
+		results = mergeHybridResults(ftsResults, semanticResults, limit)
+		flatDisplay = true
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if len(results) == 0 {
+		fmt.Println("No matches found.")
+		return nil
+	}
+
+	displayResults(db, proj.RootPath, results, searchLimit, flatDisplay)
+	return nil
+}
+
 var searchCmd = &cobra.Command{
 	Use:   "search [query]",
 	Short: "Perform a search",
@@ -32,92 +119,9 @@ var searchCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		query := strings.Join(args, " ")
-		startDir := projectPath
-		if startDir == "" {
-			startDir = DefaultStartDir
-		}
-		proj, err := project.FindProject(startDir)
-		if err != nil {
+		if err := runSearch(query, projectPath); err != nil {
 			os.Exit(1)
 		}
-		if err := proj.Init(); err != nil {
-			os.Exit(1)
-		}
-
-		switch searchMode {
-		case "fts", "semantic", "hybrid":
-		default:
-			util.Logger.Error().Str("mode", searchMode).Msg("invalid search mode (use: fts, semantic, hybrid)")
-			os.Exit(1)
-		}
-
-		db, err := proj.OpenFTS()
-		if err != nil {
-			util.Logger.Error().Err(err).Msg("opening database")
-			os.Exit(1)
-		}
-		defer proj.Close()
-
-		limit := searchLimit * searchGroupMultiplier
-		var results []*project.SearchResult
-
-		if searchCollection == "" {
-			searchCollection = config.DefaultCollectionName
-		} else {
-			project.AssertCollectionValid(proj, searchCollection)
-		}
-
-		if err := initEmbedder(); err != nil {
-			util.Logger.Error().Err(err).Msg("failed to initialize embedder")
-			return
-		}
-		defer closeEmbedder()
-
-		flatDisplay := false
-		switch searchMode {
-		case "fts":
-			results, err = db.SearchFTS(query, searchCollection, limit)
-		case "semantic":
-			if semanticSearchFn == nil {
-				util.Logger.Warn().Msg("semantic search unavailable (compile with -tags onnx); falling back to fts")
-				results, err = db.SearchFTS(query, searchCollection, limit)
-			} else {
-				results, err = semanticSearchFn(proj, db, query, searchCollection, limit)
-				flatDisplay = true
-			}
-		case "hybrid":
-			ftsResults, err := db.SearchFTS(query, searchCollection, limit)
-			if err != nil {
-				break
-			}
-			var semanticResults []*project.SearchResult
-			if semanticSearchFn != nil {
-				var semErr error
-				semanticResults, semErr = semanticSearchFn(proj, db, query, searchCollection, limit)
-				if semErr != nil {
-					util.Logger.Warn().Err(semErr).Msg("semantic search failed, using FTS only")
-					break
-				}
-			} else {
-				util.Logger.Warn().Msg("semantic search unavailable (compile with -tags onnx); using FTS only")
-				results = ftsResults
-				break
-			}
-			results = mergeHybridResults(ftsResults, semanticResults, limit)
-			flatDisplay = true
-		}
-
-		if err != nil {
-			util.Logger.Error().Err(err).Msg("Search failed")
-			os.Exit(1)
-		}
-
-		if len(results) == 0 {
-			fmt.Println("No matches found.")
-			return
-		}
-
-		displayResults(db, proj.RootPath, results, searchLimit, flatDisplay)
 	},
 }
 
