@@ -353,3 +353,23 @@ func TestExcludeDoubleStarPattern(t *testing.T) {
 		}
 	}
 }
+
+func TestExcludeRootNodeModulesOnly(t *testing.T) {
+	f := newFileFilter(nil, []string{"**/*"}, []string{"node_modules/**"})
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"src/main.go", true},
+		{"node_modules/pkg/index.js", false},
+		{"sub/node_modules/pkg/index.js", true},
+		{"README.md", true},
+		{"a/b/node_modules/pkg/index.js", true},
+	}
+	for _, tc := range tests {
+		got := f.Match(tc.path)
+		if got != tc.want {
+			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}

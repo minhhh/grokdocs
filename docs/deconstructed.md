@@ -37,7 +37,7 @@
 
 * **CLI Commands (`cmd/grokdocs/`)**: Entry points bootstrapping the project (`root.go`, `init.go`), triggering synchronization (`sync.go`), running database metrics (`status.go`), or serving queries (`search.go`).
 
-* **Ingestion (`internal/ingest/`)**: The control loop (`ingest.go`) that discovers files using glob rules (`walk.go`, `glob.go`), determines changed files via checksums, and coordinates chunking and storage.
+* **Ingestion (`internal/ingest/`)**: The control loop (`ingest.go`) that discovers files using glob rules (`walk.go`, `glob.go`), determines changed files via checksums, and coordinates chunking and storage. File filtering uses `matchGlob` which distinguishes between patterns **without a `/`** (basename match at any depth) and patterns **with a `/`** (full relative-path match). See [File Filtering](#file-filtering) below.
 
 * **Parsing (`internal/parser/`)**: The parser registry (`parser.go`) and implementations (`markdown.go` and `chunkx.go`) that partition files into size-constrained chunks.
 
@@ -56,6 +56,19 @@
 * `DefaultChunkMinSizeChar` = `200` (defined in `internal/parser/parser.go:13`) — soft lower bound for Markdown heading flushes.
 
 * `DefaultChunkOverlap` = `10` (defined in `internal/parser/parser.go:14`).
+
+### File Filtering: Basename vs Full-Path Matching
+
+Defined in `internal/ingest/glob.go:matchGlob`. The behavior is determined by the presence of `/` in the pattern:
+
+| Pattern | Has `/`? | Match target | Matches at depth? |
+|---|---|---|---|
+| `node_modules` | No | `filepath.Base(path)` via `filepath.Match` | Yes — any depth |
+| `node_modules/**` | Yes | Full `relPath` via `**` aware matching | No — root-level only |
+| `*.md` | No | `filepath.Base(path)` | Yes — any depth |
+| `docs/*.md` | Yes | Full `relPath` via `filepath.Match` | No — `docs/` only |
+
+Default exclude list (`defaultExcludeList` in `ingest.go:63`) uses bare names to skip directories like `.git`, `node_modules`, `vendor` at **any depth**. Provide a path-prefixed pattern to scope exclusion to the root level only.
 
 ### CLI Parameter Precedence
 

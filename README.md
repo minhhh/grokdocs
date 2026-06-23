@@ -155,6 +155,21 @@ collections:
 
 When both `files` and `include` are omitted, a built-in default allowlist covers common source and doc extensions (`.md`, `.go`, `.py`, `.rs`, `.toml`, etc.). A default exclude list skips `.git`, `node_modules`, `vendor`, `__pycache__`, and similar.
 
+#### Pattern Matching: Basename vs Full Path
+
+The way a pattern is matched depends on whether it contains a `/`:
+
+| Pattern | Contains `/`? | Match behavior | Example matches |
+|---|---|---|---|
+| `node_modules` | No | Matches **basename** at **any depth** via `filepath.Match(pattern, filepath.Base(path))` | `node_modules/pkg/foo.js`, `a/b/node_modules/foo.js` |
+| `node_modules/**` | Yes | Matches **full relative path** (supports `**` glob) | `node_modules/pkg/foo.js` only (root-level), NOT `a/b/node_modules/foo.js` |
+| `*.md` | No | Matches **basename** at any depth | `readme.md`, `docs/intro.md`, `a/b/c/file.md` |
+| `docs/*.md` | Yes | Matches **full path** | `docs/intro.md` only, NOT `a/docs/foo.md` |
+
+In short: patterns without `/` match the filename anywhere in the tree; patterns with `/` anchor to the full relative path. This applies to both `include` and `exclude` lists, as well as the built-in defaults.
+
+The default exclude list uses bare names (`node_modules`, `.git`, `vendor`, etc.) to match those directories at **any depth**. To restrict an exclude to the **root level only**, use a path-prefixed pattern like `node_modules/**`.
+
 ### Root Directory Lookup Algorithm
 
 All CLI commands support a global `-p, --project <path>` flag to specify the
@@ -167,44 +182,117 @@ workspace root. If the flag is omitted:
 
 ## CLI Interface
 
-All commands support the global `-p, --project <path>` flag and `-v, --verbose` for verbose logging.
-If `-p` is omitted, the CLI uses the lookup algorithm above to discover the project workspace.
+### Global Flags
 
-- `grokdocs init`: Initialize the workspace and generate a default
-  configuration file (`config.yaml`) inside the `.grokdocs` directory.
+All commands inherit these persistent flags:
 
-- `grokdocs sync`: Scan directories and synchronize files into the SQLite database.
-  - `--all`: Sync all configured collections.
-  - `--collection <name>`: Sync only the specified collection.
-  - `--prune`: Remove orphaned file records (default: `true`).
-  - `--concurrency <n>`: Number of files to process concurrently (default: `1`).
-  - `--embed`: Compute and store vector embeddings during sync.
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `-p, --project <path>` | `string` | `""` (auto-detect) | Project root path |
+| `-v, --verbose` | `bool` | `false` | Verbose output with timestamps and TRACE log level |
+| `--log-format <format>` | `string` | `"text"` | Log format (`text` or `json`) |
 
-- `grokdocs embed`: Compute and store vector embeddings for existing chunks.
-  - `--all`: Embed all configured collections.
-  - `--collection <name>`: Embed only the specified collection.
-  - `--concurrency <n>`: Number of chunks to embed concurrently (default: `1`).
-  - `--rebuild`: Clear and re-embed all chunks.
-  - `--prune`: Remove orphaned vectors after embedding (default: `true`).
+### Command Tree
 
-- `grokdocs search "<query>"`: Search indexed files and return matching chunks.
+```
+grokdocs
+├── init              Initialize workspace configuration
+├── sync              Synchronize files with the database
+├── search [query]    Search indexed chunks
+├── embed             Compute and store vector embeddings
+├── files             List files in a collection
+├── stats             Show indexing statistics
+│   └── root          Show path to the active .grokdocs directory
+└── version           Print the version number
+```
 
-  ```text
-  [0] docs/architecture.md - 1 chunks
-    [0] Architecture [L1-L35] — score: 0.123 (architecture-docs-architecture-md--0)
+### `grokdocs init`
 
-  [1] internal/parser/chunkx.go - 2 chunks
-    [0] [L1-L107] — score: 0.456 (default-internal-parser-chunkx-go--0)
-    [1] [L108-L200] — score: 0.321 (default-internal-parser-chunkx-go--1)
-  ```
+Generates a default `config.yaml` inside the `.grokdocs` folder at the project root.
 
-  - `--collection <name>`: Limit search to a specific collection.
-  - `--mode <hybrid|fts|semantic>`: Search strategy (default: `hybrid`).
-  - `--limit <n>`: Number of results to return (default: `5`).
-  - `--rrfk <k>`: RRF constant for hybrid ranking (default: `60`).
+No command-specific flags.
 
-- `grokdocs stats`: Show project statistics.
-- `grokdocs version`: Print version.
+### `grokdocs sync`
+
+Scan folders and synchronize files into SQLite and the FAISS index.
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--all` | `bool` | `false` | Synchronize all configured collections |
+
+  (mutually exclusive with `--collection`)
+
+| `-c, --collection <name>` | `string` | `""` | Synchronize only the specified collection |
+| `--prune` | `bool` | `true` | Remove orphaned file records (files deleted since last sync) |
+| `--concurrency <n>` | `int` | `1` | Number of files to process concurrently |
+| `--embed` | `bool` | `false` | Compute and store vector embeddings during sync |
+
+### `grokdocs embed`
+
+Compute and store vector embeddings for chunks missing them, and optionally prune orphaned vectors.
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--all` | `bool` | `false` | Embed all configured collections |
+
+  (mutually exclusive with `--collection`)
+
+| `-c, --collection <name>` | `string` | `""` | Embed only the specified collection |
+| `--concurrency <n>` | `int` | `1` | Number of chunks to embed concurrently |
+| `--prune` | `bool` | `true` | Remove orphaned vectors after embedding |
+| `--rebuild` | `bool` | `false` | Clear and re-embed all chunks |
+
+Requires compilation with `-tags onnx`.
+
+### `grokdocs search <query>`
+
+Search indexed chunks using FTS5, semantic (vector), or hybrid mode.
+
+```text
+[0] docs/architecture.md - 1 chunks
+  [0] Architecture [L1-L35] — score: 0.123 (architecture-docs-architecture-md--0)
+
+[1] internal/parser/chunkx.go - 2 chunks
+  [0] [L1-L107] — score: 0.456 (default-internal-parser-chunkx-go--0)
+  [1] [L108-L200] — score: 0.321 (default-internal-parser-chunkx-go--1)
+```
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `-c, --collection <name>` | `string` | `""` | Limit search to the specified collection |
+| `-m, --mode <mode>` | `string` | `"hybrid"` | Search mode: `fts`, `semantic`, or `hybrid` |
+| `--limit <n>` | `int` | `5` | Maximum number of results to return |
+| `--rrfk <k>` | `float64` | `60` | RRF constant `k` for hybrid ranking |
+
+Semantic and hybrid modes require compilation with `-tags onnx`.
+
+### `grokdocs files`
+
+List indexed files in one or more collections with pagination.
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--all` | `bool` | `false` | List files in all configured collections |
+
+  (mutually exclusive with `--collection`)
+
+| `-c, --collection <name>` | `string` | `""` | List files in the specified collection |
+| `--limit <n>` | `int` | `0` | Maximum files to list (0 = unlimited) |
+| `--offset <n>` | `int` | `0` | Number of files to skip |
+
+### `grokdocs stats`
+
+Display indexed statistics: collection count, documents per collection, total chunks, and total characters.
+
+No command-specific flags.
+
+#### `grokdocs stats root`
+
+Print the absolute path of the discovered `.grokdocs` directory.
+
+### `grokdocs version`
+
+Print the version number (set via `ldflags` at build time; defaults to `"dev"`).
 
 ### Profiling
 

@@ -390,6 +390,37 @@ func TestWalkFilesOnlyIncludedFolders(t *testing.T) {
 	}
 }
 
+func TestWalkFilesRootNodeModulesOnly(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+		cont string
+	}{
+		{"node_modules/pkg/index.js", false, "code"},
+		{"sub/node_modules/pkg/index.js", true, "code"},
+		{"src/main.go", true, "package main"},
+	}
+
+	root := t.TempDir()
+	for _, tc := range tests {
+		writeFile(t, root, tc.path, tc.cont)
+	}
+
+	results := collectWalkResultsWithFilter(t, root, newFileFilter(nil, nil, []string{"node_modules/**"}))
+	got := map[string]bool{}
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		got[r.RelPath] = true
+	}
+	for _, tc := range tests {
+		if got[tc.path] != tc.want {
+			t.Errorf("RelPath %q: got present=%v, want %v", tc.path, got[tc.path], tc.want)
+		}
+	}
+}
+
 func TestWalkFilesDoubleStarExclude(t *testing.T) {
 	tests := []struct {
 		path string
