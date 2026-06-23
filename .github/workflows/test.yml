@@ -47,9 +47,9 @@ jobs:
 
       - name: Download ONNX Runtime
         run: |
-          curl -sLO https://github.com/microsoft/onnxruntime/releases/download/v1.21.0/onnxruntime-linux-x64-1.21.0.tgz
-          tar xzf onnxruntime-linux-x64-1.21.0.tgz
-          sudo cp onnxruntime-linux-x64-1.21.0/lib/libonnxruntime* /usr/local/lib/
+          curl -sLO https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-linux-x64-1.27.0.tgz
+          tar xzf onnxruntime-linux-x64-1.27.0.tgz
+          sudo cp onnxruntime-linux-x64-1.27.0/lib/libonnxruntime* /usr/local/lib/
           sudo ln -sf libonnxruntime.so /usr/local/lib/onnxruntime.so
           sudo ldconfig
 
