@@ -266,3 +266,43 @@ func TestStress_Interleaved(t *testing.T) {
 		t.Fatalf("consumer consumed %d items, want %d", got, n)
 	}
 }
+
+func TestPush_DoesNotBlockWhilePopIsBlocked(t *testing.T) {
+	q := NewWalkQueue()
+	const n = 100000
+
+	// Consumer: 1 item/sec — intentionally slow to let queue grow
+	go func() {
+		for {
+			_, ok := q.Pop()
+			if !ok {
+				return
+			}
+			time.Sleep(time.Second)
+		}
+	}()
+
+	// Let consumer enter Pop and block in Wait (queue is empty)
+	time.Sleep(10 * time.Millisecond)
+
+	// Producer: push everything — must NOT block even though Pop is active
+	start := time.Now()
+	for i := 0; i < n; i++ {
+		q.Push(WalkResult{RelPath: fmt.Sprintf("file%d.go", i)})
+	}
+	pushElapsed := time.Since(start)
+
+	remaining := q.Len()
+	t.Logf("Pushed %d items in %v (%.0f items/sec)", n, pushElapsed, float64(n)/pushElapsed.Seconds())
+	t.Logf("Queue length after all pushes: %d (should be ~%d)", remaining, n-1)
+
+	// Close queue, don't wait for consumer's 1s sleeps
+	q.Close()
+
+	if pushElapsed > time.Second {
+		t.Fatalf("Push took %v, expected < 1s — Push blocked when it should not", pushElapsed)
+	}
+	if remaining < n-5 {
+		t.Fatalf("Queue has %d items but should have ~%d — consumer drained too much during push", remaining, n-1)
+	}
+}

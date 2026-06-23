@@ -296,7 +296,6 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 				}
 
 				relPath := filepath.Join(cfg.Path, wr.RelPath)
-
 				parserName, ok := parser.ResolveParserName(proj.Config, collectionName, relPath)
 				if !ok {
 					util.Logger.Warn().Str("path", relPath).Msg("no parser matched for file, skipping")
