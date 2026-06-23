@@ -5,6 +5,7 @@ package embed
 import (
 	"fmt"
 	"math"
+	"os"
 	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
@@ -40,7 +41,7 @@ func GetGlobalEmbedder() (*Embedder, error) {
 
 	didInit := !ort.IsInitialized()
 	if didInit {
-		ort.SetSharedLibraryPath("/usr/local/lib/libonnxruntime.dylib")
+		setSharedLibraryPath()
 		if err := ort.InitializeEnvironment(); err != nil {
 			return nil, fmt.Errorf("init onnx runtime: %w", err)
 		}
@@ -149,6 +150,22 @@ func Dim() int {
 		return 0
 	}
 	return e.dim
+}
+
+// setSharedLibraryPath tries common Homebrew paths for libonnxruntime.
+func setSharedLibraryPath() {
+	candidates := []string{
+		"/opt/homebrew/lib/libonnxruntime.dylib",
+		"/usr/local/lib/libonnxruntime.dylib",
+		"/home/linuxbrew/.linuxbrew/lib/libonnxruntime.so",
+		"libonnxruntime.so",
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			ort.SetSharedLibraryPath(p)
+			return
+		}
+	}
 }
 
 var closeOnce sync.Once

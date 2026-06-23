@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string (e.g. v0.0.1-test)"
+        required: true
+        default: v0.0.1-test
+
+env:
+  VERSION: ${{ inputs.version || github.ref_name }}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            label: linux-amd64
+
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            label: linux-arm64
+
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            label: darwin-amd64
+
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            label: darwin-arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          check-latest: true
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libc6-dev
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install faiss onnxruntime
+
+      - name: Build FTS-only binary
+        run: |
+          go build -tags fts5 \
+            -ldflags "-X main.version=${{ env.VERSION }}" \
+            -o "grokdocs-${{ matrix.label }}-fts" \
+            ./cmd/grokdocs
+
+      - name: Build full binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          go build -tags "fts5 onnx" \
+            -ldflags "-X main.version=${{ env.VERSION }}" \
+            -o "grokdocs-${{ matrix.label }}-full" \
+            ./cmd/grokdocs
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: grokdocs-${{ matrix.label }}
+          path: grokdocs-${{ matrix.label }}-*
+
+  create-release:
+    if: github.event_name == 'push'
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: grokdocs-*
+          merge-multiple: true
+
+      - name: Generate release notes
+        run: |
+          awk '/^## \[/{if (found) exit; found=1; next} found && /^## \[/{exit} found{print}' CHANGELOG.md > release-notes.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          files: |
+            grokdocs-*-fts
+            grokdocs-*-full

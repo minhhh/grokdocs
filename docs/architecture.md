@@ -1,12 +1,12 @@
 # grokdocs Architecture
 
 ## Technical Stack
-- **Language**: Go 1.23+
-- **Chunking**: `gomantics/chunkx` (AST-based semantic chunking, 30+ languages)
+- **Language**: Go 1.25+
+- **Chunking**: `gomantics/chunkx` (AST-based semantic chunking, 30+ languages) + custom markdown line-by-line chunker
 - **Vector Search**: FAISS via Go bindings (local, offline)
 - **Embeddings**: Local ONNX models (SentenceTransformer, offline inference)
 - **Metadata & FTS Storage**: SQLite + FTS5 for file tracking, document metadata, and full-text search
-- **Tokenizer**: Custom SentencePiece Unigram tokenizer for ONNX model compatibility
+- **Tokenizer**: Custom SentencePiece Unigram (Viterbi) + WordPiece tokenizers for ONNX model compatibility
 - **CLI Framework**: Cobra
 
 ## Project Layout
@@ -27,7 +27,7 @@ See [deconstructed.md](./deconstructed.md) for the complete file-by-file, functi
 ## Design Principles
 - **Local-first**: All processing runs offline — no external API calls for chunking or embedding. Model download is the only network dependency (once, at setup).
 - **Graceful degradation**: Missing FAISS index or ONNX model degrades to FTS-only search. No single component failure blocks the pipeline.
-- **Line-oriented UX**: Search results map to integer line ranges, enabling direct disk reads for display rather than relying on cached chunk text.
+- **Line-oriented UX**: Search results map to integer line ranges and display snippets from the FTS5 index, with file paths for direct disk access when needed.
 
 ## Data Flow (High Level)
 
@@ -37,7 +37,8 @@ Source files on disk
         -> ingest.SyncCollection()
             -> per file: resolve parser -> ingestFile()
                 -> Parser.Parse(relPath, content)
-                    -> chunkx AST-based semantic chunking
+                    -> markdown: line-by-line section-aware chunker (4-tier split)
+                       chunkx: AST-based semantic chunking (30+ languages)
                     -> splitChunk() post-processing for oversized chunks
                     -> markdown header -> section mapping
                 -> ChunkRecord[] -> SQLite (chunks table + FTS5 index)
@@ -49,8 +50,9 @@ Source files on disk
 
 ### `internal/parser/` — Chunking & Section Detection
 - **Parser interface + registry**: Extensible via `RegisterParser()` / `GetParser()`. Collection config can override the default extension-to-parser mapping using priority-based matching (exact file > extension > wildcard).
-- **`ChunkxParser`**: Wraps `gomantics/chunkx` for AST-aware semantic chunking. Uses `CharTokenizer` (Unicode rune counting) for size enforcement. Registered under two names: `"chunkx"` (code files) and `"markdown"` (`.md`/`.markdown` with `languages.Markdown`).
-- **`splitChunk()`**: chunkx's AST boundaries may not respect the 1300-char max size (e.g., a 3000-char docstring). `splitChunk` divides oversized chunks into roughly equal parts by rune count, computing sub-chunk line ranges from newline offsets (capped at the original chunk's `EndLine`).
+- **`MarkdownParser`**: Line-by-line, section-aware chunker. Respects code fence boundaries. Splits on headings when >= 200 chars accumulated. Four-tier split for oversized chunks: blank line > sentence separator > word separator > anywhere.
+- **`ChunkxParser`**: Wraps `gomantics/chunkx` for AST-aware semantic chunking. Uses `CharTokenizer` (Unicode rune counting) for size enforcement. Auto-detects language from file path. Registered as `"chunkx"`.
+- **`splitChunk()`**: chunkx's AST boundaries may not respect the 1500-char max size (e.g., a 3000-char docstring). `splitChunk` divides oversized chunks into roughly equal parts by rune count, computing sub-chunk line ranges from newline offsets (capped at the original chunk's `EndLine`).
 - **Section tracking**: Markdown headers are parsed and each chunk is tagged with the most recent header's `SectionNum` and `SectionTitle`.
 
 ### `internal/ingest/` — File Traversal & Ingestion
@@ -62,13 +64,13 @@ Source files on disk
 - Singleton `Embedder` with lazy initialization. ONNX inference pipeline: tokenize (custom SentencePiece Unigram) -> model forward pass -> mean pooling -> L2 normalization -> output vector.
 
 ### `internal/project/` — Storage & Project Lifecycle
-- **SQLite/FTS5** (`fts.go`): Schema with 3 tables (`files`, `documents`, `chunks`) + FTS5 virtual table with auto-sync triggers. CRUD operations for all entities, batch chunk saving, FTS5 BM25 search with snippet generation.
+- **SQLite/FTS5** (`fts.go`): Schema with 4 tables (`files`, `documents`, `chunks`, `chunk_vectors`) + FTS5 virtual table with auto-sync triggers. CRUD operations for all entities, batch chunk saving, FTS5 BM25 search with snippet generation.
 - **FAISS** (`vector.go`): In-memory index persisted to disk. Per-collection index files. Supports add, search, remove, and save operations.
 - **Project discovery**: Walks up parent directories to find `.grokdocs/` marker, falls back to start directory.
 
 ### `internal/config/` — Configuration
 - YAML-based config with per-collection settings (path, files/include/exclude filters, parser overrides).
-- Default config points at `docs/` with `.md`, `.go`, `.py` includes.
+- Default config points at `"."` with no explicit overrides — falls back to built-in defaults (50+ extensions auto-included, 20+ patterns auto-excluded).
 
 ## Key Design Decisions
 
@@ -76,7 +78,7 @@ Source files on disk
 Chunking at AST boundaries (function declarations, class definitions, markdown sections) preserves semantic coherence better than byte/character-count splitting. The `splitChunk` fallback handles edge cases where a single AST node exceeds the target chunk size.
 
 ### Why both FTS5 and vector search?
-FTS5 provides fast, reliable keyword matching with BM25 ranking. Vector search enables semantic (meaning-based) retrieval. Hybrid mode blends both scores for the best of both worlds, controlled by the `--alpha` flag.
+FTS5 provides fast, reliable keyword matching with BM25 ranking. Vector search enables semantic (meaning-based) retrieval. Hybrid mode blends both scores using Reciprocal Rank Fusion (`--rrfk`, default 60).
 
 ### Why line-oriented everything?
 Search results map to integer line ranges, allowing the CLI to read source lines directly from disk for display. This avoids duplicating content in the database and keeps the snippet generation simple and accurate.
@@ -84,4 +86,4 @@ Search results map to integer line ranges, allowing the CLI to read source lines
 ## Configurations & Build Tags
 - **Build tag `onnx`**: Enables ONNX runtime for embedding generation and semantic search.
 - **Build tag `fts5`**: Enables SQLite FTS5 extension (required for full-text search).
-- **Default config**: Single `"default"` collection at `docs/` with `*.md`, `*.go`, `*.py` includes.
+- **Default config**: Single `"default"` collection at `"."` with no explicit overrides (built-in 50+ extension defaults apply).

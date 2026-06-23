@@ -12,21 +12,55 @@ keyword and similarity search.
 
 ### 1. Document Ingestion & Chunking
 
-- **Multi-format Support**: Parse Markdown, source files, configuration, and
-  plain-text files — anything your project uses.
-- **Intelligent Chunking**: Uses `gomantics/chunkx` to break down documents
-  into semantically meaningful chunks based on AST structure rather than
-  arbitrary character counts.
-- **Incremental Indexing**: Track file modification times (mtime) and
-  content hashes. Only re-chunk and re-embed files that have actually
-  changed to save compute time.
+- **Multi-format Support**: Parse Markdown, source code, config, and
+  plain-text files — anything your project uses, with 50+ extensions
+  auto-included and 20+ patterns auto-excluded by default.
+- **Intelligent Chunking**: Section-aware markdown chunker (4-tier split
+  strategy) and AST-based chunking via `gomantics/chunkx` for 30+ languages.
+- **Incremental Sync**: Tracks mtime + SHA-256 content hash per file.
+  Only re-chunks and re-embeds files that have actually changed.
+- **Three-Tier File Filtering**: `files` (explicit, exclude-proof),
+  `include` (glob whitelist), `exclude` (glob blacklist) — with `**`
+  recursive matching and basename vs full-path semantics.
 
-### 2. Hybrid Search Engine
+### 2. Three Search Modes
 
-- Generate embeddings for each chunk using a local ONNX model on-device.
-- Store embeddings in a local FAISS index for semantic search, and insert chunk text into SQLite for Full-Text Search.
-- Combine vector similarity and lexical search to retrieve the most
-  relevant chunks using Reciprocal Rank Fusion (`--rrfk`).
+- **Full-Text Search**: BM25 ranking via SQLite FTS5. Always available.
+- **Semantic Search**: 384-dim vector embeddings via local ONNX model,
+  searched with FAISS `IDMap,Flat` inner product index. Requires `-tags onnx`.
+- **Hybrid Search**: Blends BM25 and vector scores via Reciprocal Rank
+  Fusion (configurable `--rrfk`, default 60). Falls back gracefully to
+  FTS-only when semantic is unavailable.
+
+### 3. Local Embedding Pipeline (requires `-tags onnx`)
+
+- **ONNX Inference**: `all-MiniLM-L6-v2` model auto-downloaded from
+  HuggingFace on first use. Mean pooling + L2 normalization.
+- **Custom Tokenizer**: SentencePiece Unigram (Viterbi) and WordPiece
+  tokenizers, auto-detected from `tokenizer.json`.
+- **Concurrent Batch Processing**: Worker pool with configurable concurrency,
+  batch flushing of 1000 vectors to FAISS + SQLite. Rebuild mode and orphan
+  pruning included.
+
+### 4. Storage & Indexing
+
+- **SQLite/FTS5**: 4 tables + FTS5 virtual table with auto-sync triggers.
+  Tracks files, documents, chunks, and vector status.
+- **FAISS Vector Index**: Per-collection `IDMap,Flat` indices persisted to
+  `grokdocs-{collection}.index` files.
+
+### 5. CLI Commands
+
+| Command | Purpose |
+|---|---|
+| `init` | Create `.grokdocs/` workspace with default `config.yaml` |
+| `sync` | Scan files, diff with DB, parse, chunk, store, optionally embed (`--embed`), prune |
+| `embed` | Batch compute vector embeddings with rebuild (`--rebuild`) and orphan pruning |
+| `search` | Search via FTS, semantic, or hybrid mode |
+| `files` | List indexed files with pagination |
+| `stats` | Show indexing statistics per collection |
+| `stats root` | Print the active `.grokdocs/` directory path |
+| `version` | Print version number |
 
 ## Build & Installation
 
@@ -39,14 +73,13 @@ keyword and similarity search.
 
 One build tag controls feature inclusion:
 
-| Tag    | Enables                                                                 |
-|--------|-------------------------------------------------------------------------|
-| `onnx` | Local ONNX embeddings + FAISS vector search (semantic/hybrid search)    |
+| Tag    | Required? | Enables                                                              |
+|--------|-----------|----------------------------------------------------------------------|
+| `fts5` | Always    | SQLite FTS5 full-text search (BM25 ranking)                          |
+| `onnx` | Optional  | Local ONNX embeddings + FAISS vector search (semantic/hybrid search) |
 
 Without `onnx`, the binary supports FTS search only — semantic and hybrid modes are disabled.
-
-The `fts5` SQLite extension must be enabled at the CGO level for FTS functionality.
-The `mattn/go-sqlite3` driver requires the `fts5` build tag to enable it:
+Without `fts5`, the binary cannot search at all.
 
 ```bash
 go build -tags fts5 ./cmd/grokdocs              # FTS search only
@@ -61,8 +94,8 @@ defaults to `dev`:
 
 ```bash
 # Build with a specific version
-go build -tags fts5 -ldflags "-X main.version=1.0.0" -o grokdocs ./cmd/grokdocs
-./grokdocs --version   # prints "grokdocs version 1.0.0"
+go build -tags fts5 -ldflags "-X main.version=0.0.1" -o grokdocs ./cmd/grokdocs
+./grokdocs --version   # prints "grokdocs version 0.0.1"
 
 # Build without ldflags — defaults to "dev"
 go build -tags fts5 -o grokdocs ./cmd/grokdocs
@@ -74,7 +107,7 @@ go build -tags fts5 -o grokdocs ./cmd/grokdocs
 Install the binary to `$GOPATH/bin` so it's available from anywhere:
 
 ```bash
-go install -tags "fts5 onnx" -ldflags "-X main.version=1.0.0" ./cmd/grokdocs
+go install -tags "fts5 onnx" -ldflags "-X main.version=0.0.1" ./cmd/grokdocs
 ```
 
 Ensure `$(go env GOPATH)/bin` is in your `PATH`.

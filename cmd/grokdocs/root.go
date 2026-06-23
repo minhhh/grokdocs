@@ -11,7 +11,7 @@ import (
 const DefaultStartDir = "."
 
 // version is set at build time via ldflags.
-var version = "dev"
+var version = "0.0.1"
 
 var (
 	projectPath string
@@ -21,8 +21,8 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:     "grokdocs",
-	Short:   "grokdocs is a local-first documentation and code indexer",
-	Long:    `grokdocs is a local-first search engine that indexes your Markdown and code files for semantic and full-text search.`,
+	Short:   "grokdocs is a local-first documentation indexer",
+	Long:    `grokdocs is a local-first search engine that indexes Markdown and source files for semantic and full-text search.`,
 	Version: version,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		var logFormatVal util.LogFormat
