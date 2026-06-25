@@ -24,14 +24,16 @@ type mdHeading struct {
 
 func parseMdHeading(line string) (mdHeading, bool) {
 	trimmed := strings.TrimLeft(line, " \t")
-	if !strings.HasPrefix(trimmed, "#") {
+	runes := []rune(trimmed)
+	if len(runes) == 0 || (runes[0] != '#' && runes[0] != '▼') {
 		return mdHeading{}, false
 	}
+	marker := runes[0]
 	level := 0
-	for level < len(trimmed) && trimmed[level] == '#' {
+	for level < len(runes) && runes[level] == marker {
 		level++
 	}
-	if level >= len(trimmed) || (trimmed[level] != ' ' && trimmed[level] != '\t') {
+	if level >= len(runes) || (runes[level] != ' ' && runes[level] != '\t') {
 		return mdHeading{}, false
 	}
 	title := strings.TrimSpace(trimmed)
@@ -158,10 +160,12 @@ func buildFenceMap(lines []string) []bool {
 	inCode := false
 	result := make([]bool, len(lines))
 	for i, line := range lines {
-		result[i] = inCode
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			result[i] = true
 			inCode = !inCode
+		} else {
+			result[i] = inCode
 		}
 	}
 	return result

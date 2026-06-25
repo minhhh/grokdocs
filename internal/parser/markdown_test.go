@@ -19,22 +19,52 @@ func TestBuildFenceMap(t *testing.T) {
 		{
 			name:     "basic fence pair",
 			lines:    []string{"a", "```", "code", "```", "b"},
-			expected: []bool{false, false, true, true, false},
+			expected: []bool{false, true, true, true, false},
 		},
 		{
 			name:     "tilde fence pair",
 			lines:    []string{"a", "~~~", "code", "~~~", "b"},
-			expected: []bool{false, false, true, true, false},
+			expected: []bool{false, true, true, true, false},
 		},
 		{
 			name:     "unclosed fence",
 			lines:    []string{"a", "```", "code"},
-			expected: []bool{false, false, true},
+			expected: []bool{false, true, true},
 		},
 		{
 			name:     "consecutive fences toggle each line",
 			lines:    []string{"```", "```", "```"},
-			expected: []bool{false, true, false},
+			expected: []bool{true, true, true},
+		},
+		{
+			name:     "fence with info string",
+			lines:    []string{"a", "```go", "code", "```", "b"},
+			expected: []bool{false, true, true, true, false},
+		},
+		{
+			name:     "indented fence",
+			lines:    []string{"a", "  ```", "code", "  ```", "b"},
+			expected: []bool{false, true, true, true, false},
+		},
+		{
+			name:     "empty lines",
+			lines:    []string{},
+			expected: []bool{},
+		},
+		{
+			name:     "single fence line",
+			lines:    []string{"```"},
+			expected: []bool{true},
+		},
+		{
+			name:     "mixed fence types toggle together (same toggle in current impl)",
+			lines:    []string{"```", "code", "~~~", "more"},
+			expected: []bool{true, true, true, false},
+		},
+		{
+			name:     "consecutive fence",
+			lines:    []string{"a", "  ```", "code1", "  ```", "  ```", "code2", "  ```",  "b"},
+			expected: []bool{false, true, true, true, true, true, true, false},
 		},
 	}
 
@@ -194,9 +224,14 @@ func TestParseMdHeading(t *testing.T) {
 		{"## Sub", true, 2, "## Sub"},
 		{"### Deep", true, 3, "### Deep"},
 		{"  # Indented", true, 1, "# Indented"},
+		{"▼ Title", true, 1, "▼ Title"},
+		{"▼▼ Sub", true, 2, "▼▼ Sub"},
+		{"  ▼ Indented", true, 1, "▼ Indented"},
 		{"#NotSpace", false, 0, ""},
 		{"plain text", false, 0, ""},
 		{"####", false, 0, ""},
+		{"▼NotSpace", false, 0, ""},
+		{"▼▼", false, 0, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.line, func(t *testing.T) {

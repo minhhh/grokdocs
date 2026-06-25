@@ -654,10 +654,20 @@ func (fts *FTSDatabase) GetOrphanedVectorChunks() ([]VectorChunkOrphan, error) {
 	return orphans, nil
 }
 
+// sanitizeFTSQuery removes FTS5 query syntax characters that are not needed,
+// treating them as literal text. Currently replaces `-` with space so hyphenated
+// words like "mongo-like" don't get parsed as the NOT operator.
+func sanitizeFTSQuery(query string) string {
+	return strings.ReplaceAll(query, "-", " ")
+}
+
 // SearchFTS queries the FTS5 virtual table for matching text and returns matching chunks + FTS BM25 rank score.
 func (fts *FTSDatabase) SearchFTS(queryText string, collection string, limit int) ([]*SearchResult, error) {
 	fts.mu.Lock()
 	defer fts.mu.Unlock()
+
+	queryText = sanitizeFTSQuery(queryText)
+
 	sqlQuery := `
 		SELECT c.id, c.document_id, c.chunk_index, c.line_start, c.line_end, c.section_title, c.slug, snippet(chunks_fts, 0, '', '', '...', 5), -f.rank AS rank
 		FROM chunks c
