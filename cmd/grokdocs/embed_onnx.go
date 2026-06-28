@@ -5,9 +5,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 
 	"github.com/minhhh/grokdocs/internal/embed"
 	"github.com/minhhh/grokdocs/internal/ingest"
@@ -44,44 +47,74 @@ func embedCollectionImpl(proj *project.Project, db *project.FTSDatabase, collect
 	work := make(chan int, concurrency)
 	results := make(chan embedResult, concurrency)
 
-	g, ctx := errgroup.WithContext(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	g, ctx := errgroup.WithContext(ctx)
 
 	for w := 0; w < concurrency; w++ {
-		g.Go(func() error {
-			for idx := range work {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
+		g.Go(func() (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("worker panicked: %v", r)
 				}
-
+			}()
+			for idx := range work {
 				text := textContents[idx]
 				if len(strings.TrimSpace(text)) < 3 {
-					results <- embedResult{id: chunkIDs[idx]}
+					select {
+					case results <- embedResult{id: chunkIDs[idx]}:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 					continue
 				}
 
-				vec, err := embed.Embed(text)
-				if err != nil {
+				vec, derr := embed.Embed(text)
+				if derr != nil {
 					preview := text
 					if len([]rune(preview)) > 80 {
 						preview = string([]rune(preview)[:80]) + "..."
 					}
-					util.Logger.Error().Err(err).Int64("chunk_id", chunkIDs[idx]).Str("preview", preview).Msg("skipping chunk: embed failed")
-					results <- embedResult{id: chunkIDs[idx], err: err}
+					util.Logger.Error().Err(derr).Int64("chunk_id", chunkIDs[idx]).Str("preview", preview).Msg("skipping chunk: embed failed")
+					select {
+					case results <- embedResult{id: chunkIDs[idx], err: derr}:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 					continue
 				}
-				results <- embedResult{id: chunkIDs[idx], vector: vec}
+				select {
+				case results <- embedResult{id: chunkIDs[idx], vector: vec}:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 			return nil
 		})
 	}
 
 	go func() {
+		defer close(work)
 		for i := range chunkIDs {
-			work <- i
+			select {
+			case work <- i:
+			case <-ctx.Done():
+				return
+			}
 		}
-		close(work)
 	}()
 
 	var (

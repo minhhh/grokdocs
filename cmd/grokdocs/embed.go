@@ -161,6 +161,7 @@ func runEmbed(startDir string) error {
 		wg.Wait()
 
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "Collection %q: embedding interrupted after %d chunks: %v\n", coll, embedded, err)
 			return err
 		}
 
