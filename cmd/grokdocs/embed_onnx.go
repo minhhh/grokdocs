@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/minhhh/grokdocs/internal/embed"
 	"github.com/minhhh/grokdocs/internal/ingest"
@@ -64,6 +65,7 @@ func embedCollectionImpl(proj *project.Project, db *project.FTSDatabase, collect
 
 	g, ctx := errgroup.WithContext(ctx)
 
+	var chunkCount int32
 	for w := 0; w < concurrency; w++ {
 		g.Go(func() (err error) {
 			defer func() {
@@ -72,6 +74,10 @@ func embedCollectionImpl(proj *project.Project, db *project.FTSDatabase, collect
 				}
 			}()
 			for idx := range work {
+				if n := atomic.AddInt32(&chunkCount, 1); n%100 == 0 {
+					util.Logger.Debug().Int32("processed", n).Int("total", len(chunkIDs)).Msg("embed progress")
+				}
+
 				text := textContents[idx]
 				if len(strings.TrimSpace(text)) < 3 {
 					select {
@@ -82,8 +88,12 @@ func embedCollectionImpl(proj *project.Project, db *project.FTSDatabase, collect
 					continue
 				}
 
-				vec, derr := embed.Embed(text)
-				if derr != nil {
+			tStart := time.Now()
+			vec, derr := embed.Embed(text)
+			if elapsed := time.Since(tStart); elapsed > 500*time.Millisecond {
+				util.Logger.Debug().Int64("chunk_id", chunkIDs[idx]).Dur("elapsed", elapsed).Msg("slow embed")
+			}
+			if derr != nil {
 					preview := text
 					if len([]rune(preview)) > 80 {
 						preview = string([]rune(preview)[:80]) + "..."
@@ -174,23 +184,36 @@ func flushBatch(vdb *project.VectorDatabase, db *project.FTSDatabase, collection
 		return
 	}
 
+	tStart := time.Now()
+	util.Logger.Debug().Str("collection", collection).Int("batch_size", len(ids)).Msg("flushBatch: start")
+
 	if err := vdb.RemoveIDs(ids); err != nil {
 		util.Logger.Warn().Err(err).Int("batch", len(ids)).Msg("failed to remove existing vectors before batch add")
 	}
+	tAfterRemove := time.Now()
 
 	if err := vdb.AddVectors(ids, vectors); err != nil {
 		util.Logger.Error().Err(err).Int("batch", len(ids)).Msg("failed to add vectors batch")
 		return
 	}
+	tAfterAdd := time.Now()
 
 	if err := vdb.Save(); err != nil {
 		util.Logger.Error().Err(err).Int("batch", len(ids)).Msg("failed to save vector index after batch")
 		return
 	}
+	tAfterSave := time.Now()
 
 	if err := db.MarkVectorized(ids, collection); err != nil {
 		util.Logger.Warn().Err(err).Int("batch", len(ids)).Msg("failed to mark chunk batch as vectorized")
 	}
+
+	util.Logger.Debug().Str("collection", collection).Int("batch_size", len(ids)).
+		Dur("remove_ms", tAfterRemove.Sub(tStart)).
+		Dur("add_ms", tAfterAdd.Sub(tAfterRemove)).
+		Dur("save_ms", tAfterSave.Sub(tAfterAdd)).
+		Dur("total_ms", time.Since(tStart)).
+		Msg("flushBatch: done")
 }
 
 func pruneOrphans(proj *project.Project, db *project.FTSDatabase, orphans []project.VectorChunkOrphan) error {
