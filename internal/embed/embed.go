@@ -77,7 +77,20 @@ func GetGlobalEmbedder() (*Embedder, error) {
 		return nil, fmt.Errorf("new tokenizer: %w", err)
 	}
 
-	session, err := ort.NewDynamicAdvancedSession(mf.ModelPath, inputNames, outputNames, nil)
+	sessionOpts, err := ort.NewSessionOptions()
+	if err != nil {
+		if didInit {
+			ort.DestroyEnvironment()
+		}
+		return nil, fmt.Errorf("new session options: %w", err)
+	}
+	defer sessionOpts.Destroy()
+
+	_ = sessionOpts.SetIntraOpNumThreads(0)
+	_ = sessionOpts.SetInterOpNumThreads(0)
+	_ = sessionOpts.SetExecutionMode(ort.ExecutionModeSequential)
+
+	session, err := ort.NewDynamicAdvancedSession(mf.ModelPath, inputNames, outputNames, sessionOpts)
 	if err != nil {
 		if didInit {
 			ort.DestroyEnvironment()

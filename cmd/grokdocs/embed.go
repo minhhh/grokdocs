@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/minhhh/grokdocs/internal/config"
@@ -23,7 +29,7 @@ var (
 )
 
 // embedCollectionFn is set by onnx-enabled builds; nil otherwise.
-var embedCollectionFn func(proj *project.Project, db *project.FTSDatabase, collection string, chunkIDs []int64, textContents []string, concurrency int, rebuild bool, progress *util.GuardedChan[ingest.SyncProgress]) (int, error)
+var embedCollectionFn func(ctx context.Context, proj *project.Project, db *project.FTSDatabase, collection string, chunkIDs []int64, textContents []string, concurrency int, rebuild bool, progress *util.GuardedChan[ingest.SyncProgress]) (int, error)
 
 // pruneOrphansFn is set by onnx-enabled builds; nil otherwise.
 var pruneOrphansFn func(proj *project.Project, db *project.FTSDatabase, orphans []project.VectorChunkOrphan) error
@@ -41,14 +47,29 @@ func runEmbed(startDir string) error {
 	}
 	defer proj.Close()
 
-	if embedConcurrency < 1 {
-		return fmt.Errorf("--concurrency must be at least 1")
-	}
-
 	if embedCollectionFn == nil {
 		return fmt.Errorf("embedding unavailable (compile with -tags onnx)")
 	}
 
+	if embedConcurrency < 1 {
+		return fmt.Errorf("--concurrency must be at least 1")
+	}
+
+	// Install signal handlers BEFORE any CGo init, so SIGINT/TERM/TSTP
+	// are caught even during ONNX model loading.
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGTSTP)
+	defer cancel()
+
+	// Kill previous process or running process if any
+	pidPath := filepath.Join(proj.ConfigDir, "embed.pid")
+	killPreviousEmbed(pidPath)
+
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		return fmt.Errorf("write pid file: %w", err)
+	}
+	defer os.Remove(pidPath)
+
+	// Load ONNX runtime session
 	if err := initEmbedder(); err != nil {
 		return err
 	}
@@ -71,6 +92,7 @@ func runEmbed(startDir string) error {
 		return err
 	}
 
+	// Embed the collections in targets
 	for _, coll := range targets {
 		rows, err := db.DB().Query(`
 			SELECT c.id, c.text_content
@@ -156,7 +178,7 @@ func runEmbed(startDir string) error {
 			}
 		}()
 
-		embedded, err := embedCollectionFn(proj, db, coll, toEmbedIDs, toEmbedTexts, embedConcurrency, embedRebuild, progress)
+		embedded, err := embedCollectionFn(ctx, proj, db, coll, toEmbedIDs, toEmbedTexts, embedConcurrency, embedRebuild, progress)
 		progress.Close()
 		wg.Wait()
 
@@ -166,6 +188,10 @@ func runEmbed(startDir string) error {
 		}
 
 		fmt.Fprintf(os.Stderr, "Collection %q: embedded %d chunks\n", coll, embedded)
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
 	if !embedPrune {
@@ -191,6 +217,32 @@ func runEmbed(startDir string) error {
 		return err
 	}
 	return nil
+}
+
+func killPreviousEmbed(pidPath string) {
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	// Signal 0 checks if process is alive (no signal sent).
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Killing previous embed process (PID %d)\n", pid)
+	_ = proc.Signal(syscall.SIGTERM)
+	time.Sleep(500 * time.Millisecond)
+	// If still alive after SIGTERM, escalate.
+	if err := proc.Signal(syscall.Signal(0)); err == nil {
+		_ = proc.Signal(syscall.SIGKILL)
+	}
 }
 
 var embedCmd = &cobra.Command{

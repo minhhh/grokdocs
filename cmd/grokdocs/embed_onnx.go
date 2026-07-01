@@ -5,12 +5,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/minhhh/grokdocs/internal/embed"
@@ -20,7 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const vectorBatchSize = 1000
+const vectorBatchSize = 100
 
 func init() {
 	embedCollectionFn = embedCollectionImpl
@@ -33,7 +30,7 @@ type embedResult struct {
 	err    error
 }
 
-func embedCollectionImpl(proj *project.Project, db *project.FTSDatabase, collection string, chunkIDs []int64, textContents []string, concurrency int, rebuild bool, progress *util.GuardedChan[ingest.SyncProgress]) (int, error) {
+func embedCollectionImpl(ctx context.Context, proj *project.Project, db *project.FTSDatabase, collection string, chunkIDs []int64, textContents []string, concurrency int, rebuild bool, progress *util.GuardedChan[ingest.SyncProgress]) (int, error) {
 	vdb, err := proj.OpenCollectionVector(collection, embed.Dim())
 	if err != nil {
 		return 0, fmt.Errorf("open collection vector db: %w", err)
@@ -47,21 +44,6 @@ func embedCollectionImpl(proj *project.Project, db *project.FTSDatabase, collect
 
 	work := make(chan int, concurrency)
 	results := make(chan embedResult, concurrency)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-
-	go func() {
-		select {
-		case <-sigCh:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
 
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -77,7 +59,6 @@ func embedCollectionImpl(proj *project.Project, db *project.FTSDatabase, collect
 				if n := atomic.AddInt32(&chunkCount, 1); n%100 == 0 {
 					util.Logger.Debug().Int32("processed", n).Int("total", len(chunkIDs)).Msg("embed progress")
 				}
-
 				text := textContents[idx]
 				if len(strings.TrimSpace(text)) < 3 {
 					select {
@@ -88,12 +69,12 @@ func embedCollectionImpl(proj *project.Project, db *project.FTSDatabase, collect
 					continue
 				}
 
-			tStart := time.Now()
-			vec, derr := embed.Embed(text)
-			if elapsed := time.Since(tStart); elapsed > 500*time.Millisecond {
-				util.Logger.Debug().Int64("chunk_id", chunkIDs[idx]).Dur("elapsed", elapsed).Msg("slow embed")
-			}
-			if derr != nil {
+				tStart := time.Now()
+				vec, derr := embed.Embed(text)
+				if elapsed := time.Since(tStart); elapsed > 500*time.Millisecond {
+					util.Logger.Debug().Int64("chunk_id", chunkIDs[idx]).Dur("elapsed", elapsed).Msg("slow embed")
+				}
+				if derr != nil {
 					preview := text
 					if len([]rune(preview)) > 80 {
 						preview = string([]rune(preview)[:80]) + "..."
@@ -128,20 +109,18 @@ func embedCollectionImpl(proj *project.Project, db *project.FTSDatabase, collect
 	}()
 
 	var (
-		batchIDs   []int64
-		batchVecs  []float32
-		embedded   int32
+		batchIDs  []int64
+		batchVecs []float32
+		embedded  int32
 	)
+
+	var flushPartial atomic.Bool
+	flushPartial.Store(true)
 
 	var collectorWg sync.WaitGroup
 	collectorWg.Add(1)
 	go func() {
 		defer collectorWg.Done()
-		defer func() {
-			if len(batchIDs) > 0 {
-				flushBatch(vdb, db, collection, batchIDs, batchVecs)
-			}
-		}()
 
 		dim := embed.Dim()
 		batchIDs = make([]int64, 0, vectorBatchSize)
@@ -156,6 +135,7 @@ func embedCollectionImpl(proj *project.Project, db *project.FTSDatabase, collect
 			atomic.AddInt32(&embedded, 1)
 
 			if len(batchIDs) >= vectorBatchSize {
+				util.Logger.Debug().Str("collection", collection).Msg("Flush batch")
 				flushBatch(vdb, db, collection, batchIDs, batchVecs)
 				batchIDs = make([]int64, 0, vectorBatchSize)
 				batchVecs = make([]float32, 0, vectorBatchSize*dim)
@@ -167,9 +147,21 @@ func embedCollectionImpl(proj *project.Project, db *project.FTSDatabase, collect
 				TotalFiles:     len(chunkIDs),
 			})
 		}
+
+		if flushPartial.Load() && len(batchIDs) > 0 {
+			util.Logger.Debug().Str("collection", collection).Msg("Flush last time")
+			flushBatch(vdb, db, collection, batchIDs, batchVecs)
+		}
 	}()
 
 	err = g.Wait()
+	if err == nil {
+		err = ctx.Err()
+	}
+	util.Logger.Debug().Err(err).Str("collection", collection).Msg("Finish Embedding")
+	if err != nil {
+		flushPartial.Store(false)
+	}
 	close(results)
 	collectorWg.Wait()
 
