@@ -156,7 +156,11 @@ func embedCollectionImpl(ctx context.Context, proj *project.Project, db *project
 
 	err = g.Wait()
 	if err == nil {
-		err = ctx.Err()
+		cause := context.Cause(ctx)
+		if cause != nil && cause != context.Canceled {
+			err = cause
+			util.Logger.Debug().Str("collection", collection).Err(cause).Msg("context.Cause caught error")
+		}
 	}
 	util.Logger.Debug().Err(err).Str("collection", collection).Msg("Finish Embedding")
 	if err != nil {
