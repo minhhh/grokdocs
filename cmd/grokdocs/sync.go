@@ -20,7 +20,6 @@ import (
 		syncCollection  string
 		syncPrune       bool
 		syncConcurrency int
-		syncEmbed       bool
 	)
 
 func runSyncPreRun() error {
@@ -57,14 +56,6 @@ func runSync(startDir string) error {
 		targets = []string{syncCollection}
 	} else {
 		targets = []string{config.DefaultCollectionName}
-	}
-
-	if syncEmbed {
-		if err := initEmbedder(); err != nil {
-			util.Logger.Error().Err(err).Msg("failed to initialize embedder")
-			return err
-		}
-		defer closeEmbedder()
 	}
 
 	for _, coll := range targets {
@@ -120,7 +111,7 @@ func runSync(startDir string) error {
 			}
 		}()
 
-		result, err := ingest.SyncCollection(proj, coll, progress, syncPrune, syncConcurrency, syncEmbed)
+		result, err := ingest.SyncCollection(proj, coll, progress, syncPrune, syncConcurrency)
 		progress.Close()
 		wg.Wait()
 
@@ -161,6 +152,5 @@ func init() {
 	syncCmd.Flags().StringVarP(&syncCollection, "collection", "c", "", "Synchronize only the specified collection")
 	syncCmd.Flags().BoolVar(&syncPrune, "prune", true, "Remove orphaned file records (files deleted from disk since last sync)")
 	syncCmd.Flags().IntVar(&syncConcurrency, "concurrency", 1, "Number of files to process concurrently")
-	syncCmd.Flags().BoolVar(&syncEmbed, "embed", false, "Compute and store vector embeddings during sync")
 	rootCmd.AddCommand(syncCmd)
 }

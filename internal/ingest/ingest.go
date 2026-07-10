@@ -23,9 +23,6 @@ import (
 
 
 
-// vectorIngestFn is set by onnx-enabled builds to embed chunks and push to FAISS.
-var vectorIngestFn func(proj *project.Project, collection string, chunks []*project.ChunkRecord) error
-
 func makeSlug(collectionName, relPath string) string {
 	s := collectionName + "--" + relPath
 	s = strings.ReplaceAll(s, "/", "--")
@@ -218,7 +215,7 @@ func walkFiles(ctx context.Context, collectionRoot string, filter *fileFilter) <
 	return ch
 }
 
-func SyncCollection(proj *project.Project, collectionName string, progress *util.GuardedChan[SyncProgress], prune bool, concurrency int, syncEmbed bool) (SyncResult, error) {
+func SyncCollection(proj *project.Project, collectionName string, progress *util.GuardedChan[SyncProgress], prune bool, concurrency int) (SyncResult, error) {
 	cfg, ok := proj.Config.Collections[collectionName]
 	if !ok {
 		util.Logger.Error().Str("collection", collectionName).Msg("collection not found in config")
@@ -247,16 +244,13 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 	}
 
 	var (
-		seenMu           sync.Mutex
-		seenFiles        = make(map[string]bool)
-		result           SyncResult
-		resultMu         sync.Mutex
-		newFileHashes    = make(map[string]FileState) // hash → state of newly ingested files
-		movedToState     = make(map[string]FileState) // hash → state of moved-to destination
-		processedCount   int32
-
-		pendingVecMu    sync.Mutex
-		pendingVecChunks []*project.ChunkRecord
+		seenMu         sync.Mutex
+		seenFiles      = make(map[string]bool)
+		result         SyncResult
+		resultMu       sync.Mutex
+		newFileHashes  = make(map[string]FileState)
+		movedToState   = make(map[string]FileState)
+		processedCount int32
 	)
 
 	g, ctx := errgroup.WithContext(context.Background())
@@ -312,15 +306,9 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 				seenFiles[relPath] = true
 				seenMu.Unlock()
 
-				state, hash, chunks, err := ingestFile(db, relPath, wr.AbsPath, collectionName, parserName, proj.Config)
+				state, hash, _, err := ingestFile(db, relPath, wr.AbsPath, collectionName, parserName, proj.Config)
 				if err != nil {
 					return err
-				}
-
-				if state != FileUnchanged && len(chunks) > 0 && syncEmbed {
-					pendingVecMu.Lock()
-					pendingVecChunks = append(pendingVecChunks, chunks...)
-					pendingVecMu.Unlock()
 				}
 
 				resultMu.Lock()
@@ -348,15 +336,6 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 		return SyncResult{}, err
 	}
 
-	if len(pendingVecChunks) > 0 && vectorIngestFn != nil {
-		if progress != nil {
-			progress.Send(SyncProgress{FilesProcessed: 0, Phase: "Embedding", TotalFiles: len(pendingVecChunks)})
-		}
-		if err := vectorIngestFn(proj, collectionName, pendingVecChunks); err != nil {
-			util.Logger.Warn().Err(err).Msg("vector ingestion failed")
-		}
-	}
-
 	dbFiles, err := db.ListCollectionFiles(collectionName)
 
 	if err != nil {
@@ -368,7 +347,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 		var deletedChunkIDs []int64
 
 		if progress != nil {
-			progress.Send(SyncProgress{Phase: "Pruning", TotalFiles: 4})
+			progress.Send(SyncProgress{Phase: "Pruning", TotalFiles: 3})
 		}
 
 		for _, collectionFile := range dbFiles {
@@ -395,7 +374,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 		}
 
 		if progress != nil {
-			progress.Send(SyncProgress{FilesProcessed: 1, Phase: "Pruning", TotalFiles: 4})
+			progress.Send(SyncProgress{FilesProcessed: 1, Phase: "Pruning", TotalFiles: 3})
 		}
 
 		if len(deleteIDs) > 0 {
@@ -404,25 +383,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 				return SyncResult{}, err
 			}
 			if progress != nil {
-				progress.Send(SyncProgress{FilesProcessed: 2, Phase: "Pruning", TotalFiles: 4})
-			}
-		}
-
-		if syncEmbed && vectorIngestFn != nil && len(deletedChunkIDs) > 0 {
-			vdb, err := proj.OpenCollectionVector(collectionName, 0)
-			if err != nil {
-				util.Logger.Warn().Err(err).Msg("failed to open vector db for pruning")
-			} else {
-				if err := vdb.RemoveIDs(deletedChunkIDs); err != nil {
-					util.Logger.Warn().Err(err).Int("count", len(deletedChunkIDs)).Msg("failed to prune vectors")
-				} else {
-					if err := vdb.Save(); err != nil {
-						util.Logger.Warn().Err(err).Msg("failed to save vector index after pruning")
-					}
-				}
-			}
-			if progress != nil {
-				progress.Send(SyncProgress{FilesProcessed: 3, Phase: "Pruning", TotalFiles: 4})
+				progress.Send(SyncProgress{FilesProcessed: 2, Phase: "Pruning", TotalFiles: 3})
 			}
 		}
 
@@ -434,7 +395,7 @@ func SyncCollection(proj *project.Project, collectionName string, progress *util
 			return SyncResult{}, err
 		}
 		if progress != nil {
-			progress.Send(SyncProgress{FilesProcessed: 4, Phase: "Pruning", TotalFiles: 4})
+			progress.Send(SyncProgress{FilesProcessed: 3, Phase: "Pruning", TotalFiles: 3})
 		}
 	}
 

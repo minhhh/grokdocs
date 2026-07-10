@@ -60,7 +60,7 @@ keyword and similarity search.
 | Command | Purpose |
 |---|---|
 | `init` | Create `.grokdocs/` workspace with default `config.yaml` |
-| `sync` | Scan files, diff with DB, parse, chunk, store, optionally embed (`--embed`), prune |
+| `sync` | Scan files, diff with DB, parse, chunk, store, prune |
 | `embed` | Batch compute vector embeddings with rebuild (`--rebuild`) and orphan pruning |
 | `search` | Search via FTS, semantic, or hybrid mode |
 | `files` | List indexed files with pagination |
@@ -301,7 +301,6 @@ Scan folders and synchronize files into SQLite and the FAISS index.
 | `-c, --collection <name>` | `string` | `""` | Synchronize only the specified collection |
 | `--prune` | `bool` | `true` | Remove orphaned file records (files deleted since last sync) |
 | `--concurrency <n>` | `int` | `1` | Number of files to process concurrently |
-| `--embed` | `bool` | `false` | Compute and store vector embeddings during sync |
 
 ### `grokdocs embed`
 

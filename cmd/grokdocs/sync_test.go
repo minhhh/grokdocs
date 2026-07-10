@@ -40,7 +40,6 @@ func TestRunSync_DefaultCollection(t *testing.T) {
 	syncAll = false
 	syncConcurrency = 1
 	syncPrune = true
-	syncEmbed = false
 	t.Cleanup(func() { syncCollection = ""; syncAll = false })
 
 	err := runSync(root)
@@ -57,7 +56,6 @@ func TestRunSync_NamedCollection(t *testing.T) {
 	syncAll = false
 	syncConcurrency = 1
 	syncPrune = true
-	syncEmbed = false
 	t.Cleanup(func() { syncCollection = "" })
 
 	err := runSync(root)
@@ -74,7 +72,6 @@ func TestRunSync_AllCollections(t *testing.T) {
 	syncAll = true
 	syncConcurrency = 1
 	syncPrune = true
-	syncEmbed = false
 	t.Cleanup(func() { syncAll = false })
 
 	err := runSync(root)
@@ -90,7 +87,6 @@ func TestRunSync_InvalidConcurrency(t *testing.T) {
 	syncCollection = ""
 	syncAll = false
 	syncPrune = false
-	syncEmbed = false
 	t.Cleanup(func() { syncConcurrency = 1 })
 
 	err := runSync(root)
