@@ -207,14 +207,39 @@ AST-respecting code chunking using `gomantics/chunkx`.
 
 ### Flow: Hybrid Ranking RRF blending (`cmd/grokdocs/search.go`)
 
-Blends BM25 FTS ranking and FAISS semantic distances using Reciprocal Rank Fusion:
+Blends BM25 FTS ranking and FAISS semantic (cosine) distances using Reciprocal Rank Fusion
+with sigmoid-boosted score weighting for each side:
+
 ```
-1. FTS search -> returns ordered list of ChunkRecords.
-2. Semantic search -> returns ordered list of ChunkRecords.
+1. FTS search -> ordered by BM25 (best first).
+2. Semantic search -> ordered by cosine similarity (best first).
 3. Compute score for each chunk:
-     score = sum of [ 1 / (rrfK + rank + 1) ] across both lists (rrfK default = 60)
-4. Deduplicate results using seen map, sum scores, sort descending, and truncate to limit.
+
+     FTS:      RRF_term * (1 + 0.1 * sigmoid_fts(BM25_score))
+     Semantic: RRF_term * sigmoid_sem(cosine_similarity)
+
+     where:
+       RRF_term     = 1 / (rrfK + rank + 1)                     (rrfK default = 60)
+       sigmoid_fts  = 1 / (1 + exp(-k * (BM25_score - 20)))
+                      k = 5 if BM25 < 20 (steep drop below 20)
+                      k = 0.5 if BM25 >= 20 (gentle rise above 20)
+       sigmoid_sem  = 1 / (1 + exp(-k * (cosine_sim - 0.6)))
+                      k = 0.5 if cosine_sim < 0.6 (gentle left taper)
+                      k = 5 if cosine_sim >= 0.6 (sharp rise above 0.6)
+
+4. Deduplicate via seen map (ID), sum scores, sort descending, truncate to limit.
+5. CLI flags: --mode, --rrfk (60), --limit (5).
 ```
+
+**Rationale:**
+- FTS sigmoid (center 20, kLeft=5): only genuinely strong keyword matches get the boost;
+  incidental single-term hits fall steeply to ~0 boost.
+- FTS `0.1` scaling: boost is at most 10% of the RRF term — just enough to tip the scales
+  in favor of FTS without dominating.
+- Semantic sigmoid (center 0.6, kLeft=0.5): moderately similar results are gently tapered,
+  not abruptly discarded; only noise-level scores (cosine < 0.4) get heavily suppressed.
+- Semantic right side (kRight=5): high-similarity results (cosine > 0.7) sharply rise to
+  near-full weight.
 
 ---
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"math"
 
 	"github.com/minhhh/grokdocs/internal/config"
 	"github.com/minhhh/grokdocs/internal/project"
@@ -174,6 +175,17 @@ func displayResults(db *project.FTSDatabase, rootPath string, results []*project
 	}
 }
 
+// Sigmoid Boost go from 0 to 1. It rapidly decreases to 0 for rank < center
+// This means we need to choose a good center to reflect the level of
+// matching that we want
+func sigmoidBoost(rank, center, kLeft, kRight float64) float64 {
+	x := rank - center
+	if x < 0 {
+		return 1.0 / (1.0 + math.Exp(-kLeft * x))
+	}
+	return 1.0 / (1.0 + math.Exp(-kRight * x))
+}
+
 func mergeHybridResults(fts, semantic []*project.SearchResult, limit int) []*project.SearchResult {
 	if len(fts) == 0 && len(semantic) == 0 {
 		return nil
@@ -184,10 +196,13 @@ func mergeHybridResults(fts, semantic []*project.SearchResult, limit int) []*pro
 
 	for rank, r := range fts {
 		scores[r.ID] += 1.0 / (rrfK + float64(rank) + 1)
+		boost := 0.1 * sigmoidBoost(r.Rank, 20, 5, 0.5)
+		scores[r.ID] += boost / (rrfK + float64(rank) + 1)
 		seen[r.ID] = r
 	}
 	for rank, r := range semantic {
-		scores[r.ID] += 1.0 / (rrfK + float64(rank) + 1)
+		factor := sigmoidBoost(r.Rank, 0.6, 0.5, 5)
+		scores[r.ID] += factor / (rrfK + float64(rank) + 1)
 		if _, ok := seen[r.ID]; !ok {
 			seen[r.ID] = r
 		}
