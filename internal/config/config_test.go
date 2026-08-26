@@ -24,7 +24,7 @@ func TestDefaultConfig(t *testing.T) {
 
 func TestLoadConfig(t *testing.T) {
 	yaml := `collections:
-  default:
+  custom:
     path: docs
 `
 	r := strings.NewReader(yaml)
@@ -32,9 +32,9 @@ func TestLoadConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
-	col, ok := cfg.Collections["default"]
+	col, ok := cfg.Collections["custom"]
 	if !ok {
-		t.Fatal("expected default collection")
+		t.Fatal("expected custom collection")
 	}
 	if col.Path != "docs" {
 		t.Errorf("expected path docs, got %q", col.Path)
@@ -60,6 +60,25 @@ func TestLoadConfig_DefaultsEmptyPath(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_DefaultCollectionPathForced(t *testing.T) {
+	yaml := `collections:
+  default:
+    path: docs
+`
+	r := strings.NewReader(yaml)
+	cfg, err := LoadConfig(r)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	col, ok := cfg.Collections["default"]
+	if !ok {
+		t.Fatal("expected default collection")
+	}
+	if col.Path != DefaultCollectionPath {
+		t.Errorf("expected default collection path to be %q, got %q", DefaultCollectionPath, col.Path)
+	}
+}
+
 func TestLoadConfig_InvalidYAML(t *testing.T) {
 	_, err := LoadConfig(strings.NewReader("{{invalid"))
 	if err == nil {
@@ -75,6 +94,9 @@ func TestSaveConfig(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "default") {
 		t.Errorf("expected output to contain 'default', got %q", buf.String())
+	}
+	if strings.Contains(buf.String(), "path:") {
+		t.Errorf("default collection should not have path field, got %q", buf.String())
 	}
 }
 

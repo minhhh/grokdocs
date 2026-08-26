@@ -69,8 +69,12 @@ Source files on disk
 - **Project discovery**: Walks up parent directories to find `.grokdocs/` marker, falls back to start directory.
 
 ### `internal/config/` — Configuration
+
 - YAML-based config with per-collection settings (path, files/include/exclude filters, parser overrides).
-- Default config points at `"."` with no explicit overrides — falls back to built-in defaults (50+ extensions auto-included, 20+ patterns auto-excluded).
+- **Built-in defaults includes and excludes**: 50+ extensions auto-included, 20+ patterns auto-excluded
+- **Base path**: Default config path points at `.`
+    * For the default collection, there's no option to provide a different path. If you want a different root you should put the config file there. Typescript team also removed `basePath` option in TS 7 for this reason.
+    * The path of other collections other than the default collection can be customized.
 
 ## Key Design Decisions
 

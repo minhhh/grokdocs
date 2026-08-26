@@ -4,12 +4,13 @@ import (
 	"io"
 	"os"
 
+	"github.com/minhhh/grokdocs/internal/util"
 	"gopkg.in/yaml.v3"
 )
 
 // CollectionConfig defines configuration for a single ingest collection.
 type CollectionConfig struct {
-	Path    string            `yaml:"path"`
+	Path    string            `yaml:"path,omitempty"`
 	Parsers map[string]string `yaml:"parsers,omitempty"`
 	Files   []string          `yaml:"files,omitempty"`
 	Include []string          `yaml:"include,omitempty"`
@@ -47,8 +48,12 @@ func LoadConfig(reader io.Reader) (*Config, error) {
 	for name, collection := range cfg.Collections {
 		if collection.Path == "" {
 			collection.Path = DefaultCollectionPath
-			cfg.Collections[name] = collection
 		}
+		if name == DefaultCollectionName && collection.Path != "" {
+			util.Logger.Warn().Str("path", collection.Path).Msg("ignoring path for default collection; Remove the path field")
+			collection.Path = DefaultCollectionPath
+		}
+		cfg.Collections[name] = collection
 	}
 	return &cfg, nil
 }
@@ -56,6 +61,9 @@ func LoadConfig(reader io.Reader) (*Config, error) {
 // SaveConfig writes configuration to a writer.
 func (c *Config) SaveConfig(writer io.Writer) error {
 	for name, collection := range c.Collections {
+		if name == DefaultCollectionName {
+			collection.Path = ""
+		}
 		if len(collection.Parsers) == 0 {
 			collection.Parsers = nil
 		}
