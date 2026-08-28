@@ -373,3 +373,23 @@ func TestExcludeRootNodeModulesOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestExcludeRecursiveSpecificExtension(t *testing.T) {
+	f := newFileFilter(nil, []string{"**/*"}, []string{"**/node_modules/*.ts"})
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"node_modules/foo.ts", false},
+		{"a/b/node_modules/foo.ts", false},
+		{"node_modules/foo.js", true},
+		{"src/main.ts", true},
+		{"a/b/node_modules/pkg/index.ts", true},
+	}
+	for _, tc := range tests {
+		got := f.Match(tc.path)
+		if got != tc.want {
+			t.Errorf("Match(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}

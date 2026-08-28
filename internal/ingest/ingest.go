@@ -549,7 +549,7 @@ func ingestFile(db *project.FTSDatabase, relPath string, absPath string, collect
 //             Example: ["*.md", "docs/**/*.go"] — matches any .md (any dir),
 //             or any .go under docs/ recursively
 //   - exclude: glob patterns matched against path or basename (supports **).
-//             Example: ["*_test.go", "**/node_modules/*"]
+//             Example: ["*_test.go", "**/node_modules/**"]
 //
 // When files is set, a path passes if its basename matches any entry in files
 // OR if include matches. When files is not set, include acts as a whitelist
